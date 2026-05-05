@@ -2,7 +2,7 @@
 
 A production-grade agentic analytics system that turns natural language questions into validated SQL, executes them against a real e-commerce dataset, and narrates the findings — with explicit guardrails against the failure modes that typically break LLM-driven analytics agents.
 
-**[▶ Try the live demo](https://YOUR-STREAMLIT-URL.streamlit.app)** &nbsp;·&nbsp; **[📓 Original Colab PoC](notebooks/Agentic_AI_Analytics_Bot_v1_5_8.ipynb)** &nbsp;·&nbsp; **[📊 Validation results](docs/validation.md)**
+**[▶ Try the live demo]([https://YOUR-STREAMLIT-URL.streamlit.app](https://analytics-agent-demo.streamlit.app/))** &nbsp;·&nbsp; **[📓 Original Colab PoC](notebooks/Agentic_AI_Analytics_Bot_v1_5_8.ipynb)** &nbsp;·&nbsp; **[📊 Validation results](docs/validation.md)**
 
 ---
 
