@@ -181,18 +181,28 @@ def call_llm(
 
         except Exception as e:
             err_str = str(e)
-            # Token/quota exhaustion — never retry, surface immediately
+            # Hard limits — context window or monthly quota exhausted; never retry
             fatal = any(code in err_str for code in [
-                "413", "rate_limit_exceeded", "tokens", "TPM", "RPM",
-                "too large", "reduce your message", "quota",
+                "413", "too large", "reduce your message",
+                "monthly", "quota_exceeded",
             ])
             if fatal:
                 raise
-            # Transient server errors — retry with backoff
-            retryable = any(code in err_str for code in ["429", "529"])
-            if retryable and attempt < max_retries - 1:
+            # Temporary TPM/RPM rate limit (429) — short backoff parsed from error
+            tpm_limited = "429" in err_str and any(
+                x in err_str for x in ["rate_limit_exceeded", "TPM", "RPM"]
+            )
+            if tpm_limited and attempt < max_retries - 1:
+                import re as _re
+                m = _re.search(r"try again in\s+([\d.]+)s", err_str, _re.IGNORECASE)
+                wait = float(m.group(1)) + 0.5 if m else 5.0
+                print(f"    TPM rate limit — retrying in {wait:.1f}s (attempt {attempt + 2}/{max_retries})")
+                time.sleep(wait)
+                continue
+            # Transient server errors (529) — longer exponential backoff
+            if "529" in err_str and attempt < max_retries - 1:
                 wait = 15 * (2 ** attempt)
-                print(f"    Rate limited — retrying in {wait}s (attempt {attempt + 2}/{max_retries})")
+                print(f"    Server overloaded — retrying in {wait}s (attempt {attempt + 2}/{max_retries})")
                 time.sleep(wait)
             else:
                 raise
