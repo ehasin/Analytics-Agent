@@ -1,0 +1,95 @@
+{
+  "schema_id": "olist_ecommerce",
+  "name": "Olist Brazilian Ecommerce Data Product",
+  "description": "~100k orders, Brazilian marketplace, 2016-2018. Full order lifecycle: purchase → payment → fulfillment → delivery → review. Use for: order volume/revenue trends, seller performance, payment analysis, geographic demand, delivery KPIs, product category popularity, customer satisfaction, freight costs. DO NOT use for: real-time inventory, customer identity resolution (IDs anonymized), profitability/profit margin (no cost data), returns/refunds, budget/targets, marketing attribution, data outside 2016-2018. Monetary values in BRL. Net revenue = exclude order_status='canceled', exclude freight. Gross revenue = all orders regardless of status, include both price and freight.",
+  "version": "1.0.3",
+  "tables": [
+    {
+      "table_name": "orders",
+      "description": "Central fact table. One row per order. Hub connecting all other tables. Join to order_items ON order_id (items/price/seller), payments ON order_id (method/amount), reviews ON order_id (score), customers ON customer_id (location). Use for order counts, status distribution, delivery timeliness, time-series. Not for item/product detail.",
+      "columns": [
+        ["order_id", "object", "PK. Join key for order_items, payments, reviews."],
+        ["customer_id", "object", "FK to customers. Order-scoped — use customer_unique_id in customers for cross-order customer counts."],
+        ["order_status", "object", "Values: delivered, shipped, canceled, unavailable, invoiced, processing, created, approved. Filter to 'delivered' for completed orders; exclude 'canceled' for net revenue."],
+        ["order_purchase_timestamp", "object", "When customer placed order. Primary time dimension. Cast to TIMESTAMP for date ops."],
+        ["order_approved_at", "object", "Payment approval time. Nullable. Diff with purchase_timestamp = processing lag."],
+        ["order_delivered_carrier_date", "object", "When seller handed to carrier. Nullable. Diff with approved_at = seller processing time."],
+        ["order_delivered_customer_date", "object", "Actual delivery to customer. Nullable. Compare to estimated_delivery_date for on-time/late."],
+        ["order_estimated_delivery_date", "object", "Estimated delivery shown to customer at purchase. Orders delivered after this = late."]
+      ]
+    },
+    {
+      "table_name": "order_items",
+      "description": "Item-level fact. One row per order+item sequence. Join to orders ON order_id, products ON product_id, sellers ON seller_id. Use for revenue (price+freight), product/seller performance, item counts, freight analysis. Not for payment method. One order can have items from multiple sellers.",
+      "columns": [
+        ["order_id", "object", "FK to orders."],
+        ["order_item_id", "int64", "Item sequence within order (1,2,3…). With order_id forms grain."],
+        ["product_id", "object", "FK to products."],
+        ["seller_id", "object", "FK to sellers. Different items in same order may have different sellers."],
+        ["shipping_limit_date", "object", "Seller's deadline to hand item to carrier."],
+        ["price", "float64", "Item sale price in BRL, excl. freight."],
+        ["freight_value", "float64", "Shipping cost per item in BRL. price+freight_value = total item cost."]
+      ]
+    },
+    {
+      "table_name": "products",
+      "description": "Product dimension. One row per product. Join to order_items ON product_id. Use for category revenue/volume, product attributes, top-selling categories. Category names in Portuguese.",
+      "columns": [
+        ["product_id", "object", "PK."],
+        ["product_category_name", "object", "Category in Portuguese (e.g. beleza_saude=health&beauty, informatica_acessorios=computer accessories, cama_mesa_banho=bed/bath). Nullable."],
+        ["product_name_lenght", "float64", "Name char length. Typo in col name ('lenght'). Nullable."],
+        ["product_description_lenght", "float64", "Description char length. Typo in col name ('lenght'). Nullable."],
+        ["product_photos_qty", "float64", "Number of listing photos. Nullable."],
+        ["product_weight_g", "float64", "Weight in grams. Nullable."],
+        ["product_length_cm", "float64", "Package length cm. Nullable."],
+        ["product_height_cm", "float64", "Package height cm. Nullable."],
+        ["product_width_cm", "float64", "Package width cm. Nullable."]
+      ]
+    },
+    {
+      "table_name": "customers",
+      "description": "Customer dimension. One row per customer_id (order-scoped). Join to orders ON customer_id. Use customer_unique_id (not customer_id) to count distinct real customers across orders. Use for geographic analysis, regional demand.",
+      "columns": [
+        ["customer_id", "object", "PK. Order-scoped — NOT a true unique customer ID. Use customer_unique_id for deduplication."],
+        ["customer_unique_id", "object", "True unique customer ID across orders. Use for distinct customer counts and repeat purchase analysis."],
+        ["customer_zip_code_prefix", "int64", "First 5 digits of zip code."],
+        ["customer_city", "object", "Customer city, lowercase. Most common: sao paulo."],
+        ["customer_state", "object", "2-letter state code (SP=São Paulo, RJ=Rio de Janeiro, MG=Minas Gerais)."]
+      ]
+    },
+    {
+      "table_name": "sellers",
+      "description": "Seller dimension. One row per seller. Join to order_items ON seller_id. Use for seller location, geographic distribution, seller counts by city/state.",
+      "columns": [
+        ["seller_id", "object", "PK."],
+        ["seller_zip_code_prefix", "int64", "First 5 digits of seller zip code."],
+        ["seller_city", "object", "Seller city, lowercase."],
+        ["seller_state", "object", "2-letter state code."]
+      ]
+    },
+    {
+      "table_name": "payments",
+      "description": "Payment fact. One row per payment installment. An order can have multiple rows (multiple methods or installments). Join to orders ON order_id. Use for payment method analysis, installment behavior, total payment value (SUM payment_value GROUP BY order_id). Not for item-level revenue (use order_items.price).",
+      "columns": [
+        ["order_id", "object", "FK to orders. One order can have multiple payment rows."],
+        ["payment_sequential", "int64", "Payment sequence within order (1,2,3…)."],
+        ["payment_type", "object", "Method: credit_card, boleto (bank slip), debit_card, voucher, not_defined. Credit card most common."],
+        ["payment_installments", "int64", "Number of installments. Brazilians commonly split into 2-12 monthly payments."],
+        ["payment_value", "float64", "Payment amount in BRL. SUM per order_id for order total. May differ slightly from order_items sum due to vouchers/rounding."]
+      ]
+    },
+    {
+      "table_name": "reviews",
+      "description": "Review fact. One row per review (typically one per order). Join to orders ON order_id. Use for satisfaction scores, avg rating by category/seller/region, response time. Comments in Portuguese, often null.",
+      "columns": [
+        ["review_id", "object", "PK."],
+        ["order_id", "object", "FK to orders."],
+        ["review_score", "int64", "1 (worst) to 5 (best). Dataset avg ~4.0."],
+        ["review_comment_title", "object", "Review title in Portuguese. Often null."],
+        ["review_comment_message", "object", "Review body in Portuguese. Often null."],
+        ["review_creation_date", "object", "When review was submitted."],
+        ["review_answer_timestamp", "object", "When review was acknowledged."]
+      ]
+    }
+  ]
+}
