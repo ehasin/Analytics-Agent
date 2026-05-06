@@ -2,7 +2,7 @@
 
 A production-grade agentic analytics system that turns natural language questions into validated SQL, executes them against a real e-commerce dataset, and narrates the findings — with explicit guardrails against the failure modes that typically break LLM-driven analytics agents.
 
-**[▶ Try the live demo](https://analytics-agent-demo.streamlit.app/)** &nbsp;·&nbsp; **[📓 Original Colab PoC](notebooks/Agentic_AI_Analytics_Bot_v1_5_8.ipynb)** &nbsp;·&nbsp; **[📊 Validation results](docs/validation.md)**
+**[▶ Try the live demo](https://YOUR-STREAMLIT-URL.streamlit.app)** &nbsp;·&nbsp; **[📓 Original Colab PoC](notebooks/Agentic_AI_Analytics_Bot_v1_5_8.ipynb)** &nbsp;·&nbsp; **[📊 Validation results](docs/validation.md)**
 
 ---
 
@@ -79,6 +79,22 @@ Three principles drive the design — applied consistently across prompts, class
 3. **Scope discipline** — query scope is calibrated to the question, not maxed out by default. Retrieve mode generates *only* the queries needed; Explore adds proportional context; Reason decomposes empirically without overclaiming causation.
 
 These translate into concrete guardrails in [`code_modules/_agent/prompts.py`](code_modules/_agent/prompts.py) — the central place where the agent's behaviour is shaped.
+
+## Known limitations
+
+This is a portfolio/PoC project. The architecture is designed for reliability, but several gaps exist between the current implementation and what a production analyst-replacement system would require.
+
+**Hallucination guardrails are prompt-side only.** Every defence against fabrication is an instruction to the model — there is no deterministic post-processing layer that extracts numbers from the narrative and verifies them against query results. "Copy character-by-character" is a rule, not a check. A numeric verifier that cross-references narrative figures against query output is the single highest-leverage missing component.
+
+**Eval scope.** The 50-case suite is a meaningful signal but below the statistical noise floor for tight pass-rate claims — a single regression looks like a 2% drop. All 50 cases also use the same model as both answerer and assessor (self-grading bias). The backend abstraction already supports cross-model grading; it just hasn't been run.
+
+**SQL execution is unguarded.** `duckdb_utils.run_query` executes whatever SQL the LLM emits with no AST inspection. A SELECT-only allowlist (via `sqlglot`) would close the surface in ~10 lines; it isn't implemented.
+
+**No cost or abuse controls on the public demo.** Any visitor can trigger unlimited Reason-mode queries (the most expensive tier) against the owner's API key. There is no per-session token budget, no daily spend cap, and no rate limiting.
+
+**Prompt injection is not screened.** User input is concatenated directly into planning prompts. There is no pre-classifier for instruction-override patterns ("ignore previous instructions", etc.).
+
+None of these are architectural — they're implementation gaps. The project is accurate about what it is: a well-engineered agent framework that demonstrates the *approach* to reliability, not a deployed system with the trust layer built out.
 
 ## Repository layout
 
