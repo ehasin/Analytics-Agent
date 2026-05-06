@@ -1,10 +1,16 @@
 """
-analyst_agent.py — Analytics agent: classify+plan → execute → narrate.
+analyst_agent.py — Analytics agent: classify+plan → execute → narrate → guardrails.
 
 All LLM calls go through a callable `llm_fn(prompt, tier=1)` passed at init,
 so this module has zero dependency on any specific backend. The agent requests
 tier=2 (strong model) only for narration in Reason mode; all other calls use
-the default tier=1.
+the default tier=1. Guardrail checks (groundedness + compliance) use tier=0.
+
+Pipeline stages per turn:
+  1. classify_and_plan   Single LLM call: classify question + generate SQL
+  2. execute             DuckDB execution via execute_fn; one error-driven retry
+  3. narrate             LLM narration with anti-fabrication guardrails
+  4. guardrails          Deterministic groundedness check + tier-0 compliance scan
 
 Mode selection and follow-up resolution live in chat.py. This module receives
 the mode as a parameter and uses it to: (a) scope the plan (retrieve vs explore),
@@ -12,7 +18,7 @@ the mode as a parameter and uses it to: (a) scope the plan (retrieve vs explore)
 
 Provides:
   - MODE_NAMES
-  - extract_user_context,
+  - extract_user_context
   - classify_and_plan, format_narrative
   - analyst_agent          Main entry point (single question → result dict)
 """
@@ -24,6 +30,7 @@ from .prompts import (
     NARRATIVE_PROMPT, NARRATIVE_FMT_RETRIEVE, NARRATIVE_FMT_EXPLORE, NARRATIVE_FMT_REASON,
     CONTEXT_NOTE_PLAN, CONTEXT_NOTE_NARRATE,
 )
+from .guardrails import verify_groundedness, check_compliance
 
 
 # ── Mode names ───────────────────────────────────────────────
@@ -211,7 +218,7 @@ def analyst_agent(
     mode: int = 0,
     user_context: str | None = None,
 ) -> dict:
-    """Analytics agent: classify+plan → execute → (retry) → narrate.
+    """Analytics agent: classify+plan → execute → (retry) → narrate → guardrails.
 
     Args:
         question:     user's question (already resolved if a follow-up)
@@ -219,14 +226,17 @@ def analyst_agent(
         tables:       {name: DataFrame} — passed to execute_fn and prompts
         llm_fn:       callable(prompt, tier=1) → str. Default tier=1 (fast model).
                       The agent switches to tier=2 (strong model) only for the
-                      narration phase when mode == 2 (Reason).
+                      narration phase when mode == 2 (Reason). Guardrail compliance
+                      check uses tier=0 (cheapest model).
         execute_fn:   callable(queries, tables) → queries (with results filled)
         mode:         0=Retrieve, 1=Explore, 2=Reason
         user_context: optional role string (from extract_user_context)
 
     Returns dict with keys: classification, answer, code, queries, narrative,
-    mode, error, stage_trace. stage_trace is a list of per-stage timing records
-    the caller can extend with non-agent stages (interpret, summary).
+    mode, error, stage_trace. stage_trace is a list of per-stage timing/result
+    records; the caller can extend it with non-agent stages (interpret, summary).
+    The final record is always the guardrails stage with grounding and compliance
+    results — observability only, never blocks the response.
     """
     stage_trace: list[dict] = []
 
@@ -327,6 +337,15 @@ def analyst_agent(
         stage_trace.append(narr_record)
     except Exception as e:
         narrative = f"(Narrative failed: {e})"
+
+    # Stage 4: Guardrails — observability only, never blocks response
+    grounding = verify_groundedness(narrative, queries)
+    compliance = check_compliance(narrative, llm_fn)
+    stage_trace.append({
+        "stage":      "guardrails",
+        "grounding":  grounding,
+        "compliance": compliance,
+    })
 
     return {
         "classification": classification, "answer": raw_answer, "code": all_code,

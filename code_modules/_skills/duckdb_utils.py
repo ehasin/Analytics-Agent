@@ -1,8 +1,11 @@
 """
 duckdb_utils.py — DuckDB helpers for the Analytics Agent.
 
+Requires sqlglot for SQL statement validation (pip install sqlglot).
+
 Provides:
   - normalize_sql        Clean raw LLM-generated SQL
+  - guard_sql            Raise ValueError if SQL is not a safe SELECT statement
   - build_connection     Create a DuckDB connection with optional DataFrame registration
   - run_query            Execute SQL → DataFrame
   - execute_queries      Batch-execute a list of query dicts (agent pipeline)
@@ -12,12 +15,68 @@ Provides:
 import duckdb
 import pandas as pd
 
+try:
+    import sqlglot
+    import sqlglot.expressions as _sg_exp
+    _SQLGLOT_AVAILABLE = True
+except ImportError:
+    _SQLGLOT_AVAILABLE = False
+
 
 # ── SQL cleanup ──────────────────────────────────────────────
 
 def normalize_sql(sql: str) -> str:
     """Strip markdown fences, trailing semicolons, and whitespace."""
     return sql.replace("```sql", "").replace("```", "").strip().rstrip(";").strip()
+
+
+# ── SQL guard ────────────────────────────────────────────────
+
+# Statement types that are never permitted
+_BLOCKED_TYPES = (
+    "Insert", "Update", "Delete", "Drop", "Create", "AlterTable",
+    "Truncate", "Command",  # covers ATTACH, COPY, LOAD, INSTALL in sqlglot
+)
+
+def guard_sql(sql: str) -> None:
+    """Raise ValueError if *sql* is not a safe SELECT / WITH…SELECT statement.
+
+    Blocks:
+      - Any statement type other than SELECT or WITH…SELECT
+      - References to system. or information_schema tables (checked on raw SQL)
+
+    If sqlglot is not installed or fails to parse the SQL, a RuntimeError with
+    the message 'sqlglot_parse_failed' is raised so the caller can attach a
+    guard_warning without blocking execution.
+
+    Requires: sqlglot (pip install sqlglot)
+    """
+    if not _SQLGLOT_AVAILABLE:
+        raise RuntimeError("sqlglot_parse_failed")
+
+    try:
+        statements = sqlglot.parse(sql)
+    except Exception:
+        raise RuntimeError("sqlglot_parse_failed")
+
+    if not statements or all(s is None for s in statements):
+        raise RuntimeError("sqlglot_parse_failed")
+
+    for stmt in statements:
+        if stmt is None:
+            continue
+        stmt_type = type(stmt).__name__
+        if not isinstance(stmt, (_sg_exp.Select, _sg_exp.With)):
+            raise ValueError(
+                f"Blocked SQL statement type '{stmt_type}': "
+                "only SELECT / WITH…SELECT are permitted."
+            )
+
+    sql_lower = sql.lower()
+    if "system." in sql_lower or "information_schema" in sql_lower:
+        raise ValueError(
+            "Blocked: SQL references system or information_schema tables."
+        )
 
 
 # ── Connection management ────────────────────────────────────
@@ -62,8 +121,10 @@ def execute_queries(
 ) -> list[dict]:
     """Run every query dict in *queries* (agent pipeline format).
 
-    Each dict must have a ``"code"`` key.  After execution it gains either
+    Each dict must have a ``"code"`` key. After execution it gains either
     ``"result"`` (DataFrame or string) or ``"error"`` (str).
+    A ``"guard_warning"`` key is added when sqlglot cannot parse the SQL
+    (execution proceeds in that case — the guard is skipped, not the query).
     A single shared connection is used for the whole batch.
     """
     con = build_connection(tables)
@@ -71,14 +132,30 @@ def execute_queries(
         for q in queries:
             if q.get("result") is not None:
                 continue
+
+            sql = normalize_sql(q["code"])
+
+            # ── SQL guard ────────────────────────────────────
             try:
-                sql = normalize_sql(q["code"])
+                guard_sql(sql)
+            except ValueError as e:
+                # Blocked statement — do not execute
+                q["error"] = str(e)
+                q.pop("result", None)
+                continue
+            except RuntimeError:
+                # sqlglot could not parse — warn but allow execution
+                q["guard_warning"] = "sqlglot parse failed"
+
+            # ── Execute ──────────────────────────────────────
+            try:
                 df = con.execute(sql).df()
                 q["result"] = df.to_string(index=False) if stringify_results else df
                 q.pop("error", None)
             except Exception as e:
                 q["error"] = str(e)
                 q.pop("result", None)
+
         return queries
     finally:
         con.close()
