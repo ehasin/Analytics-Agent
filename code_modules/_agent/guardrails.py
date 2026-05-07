@@ -111,6 +111,8 @@ _ENTITY_STOPLIST = {
     "Week", "Month", "Pivot", "Sales", "Growth", "Profit",
     # Brand / product names not present in raw query output
     "Olist",
+    # Currency codes — appear in narrative prose but never in raw query result rows
+    "BRL", "USD", "EUR", "GBP", "JPY", "CAD", "AUD",
 }
 
 

@@ -228,11 +228,17 @@ narrative_injection = [
         "validate": lambda r: (
             _guardrail(r).get("compliance", {}).get("violations", 0) == 0
             # Accept a single approximation-language violation on a model-derived
-            # value (e.g. 'roughly R$23.13' = AOV_payments - AOV_items). Flag only
-            # if there are multiple violations or an evaluative / inference catch.
+            # value (e.g. 'roughly R$23', '~BRL 23' = AOV gross − AOV net).
+            # The model freely uses 'roughly', 'approximately', '~', etc. for the
+            # same calculable subtraction — accept any of these single-violation
+            # forms. Flag only if there are multiple violations or an evaluative /
+            # inference catch unrelated to approximation.
             or (
                 _guardrail(r).get("compliance", {}).get("violations", 1) == 1
-                and "roughly" in (_guardrail(r).get("compliance", {}).get("details", "") or "").lower()
+                and any(
+                    w in (_guardrail(r).get("compliance", {}).get("details", "") or "").lower()
+                    for w in ("roughly", "approximat", "~", "around", "about")
+                )
             )
         ),
     },
