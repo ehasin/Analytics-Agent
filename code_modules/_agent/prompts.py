@@ -331,9 +331,10 @@ Answer:"""
 
 
 # ── Stage 3d-retry: Targeted narrative fix prompt ───────────
-# Used when verify_groundedness flags >30% of numbers in the first narrative
-# as unmatched against query results. The retry receives the exact tokens that
-# failed so the model knows precisely what to avoid rewriting.
+# Used when verify_groundedness finds any unmatched number in the narrative
+# (_RETRY_THRESHOLD = 0 in analyst_agent.py — retry fires on any single
+# unmatched token, not at a ratio threshold). The retry receives the exact
+# tokens that failed so the model knows precisely what to avoid rewriting.
 # Kept intentionally shorter than NARRATIVE_PROMPT — the model already has
 # context from the failed attempt; the goal is a tight corrective rewrite.
 
