@@ -1067,8 +1067,11 @@ def _async_log_turn(logger, turn_id, result, session_id, chat_id, turn_num):
             mode=result.get("active_mode"),
             backend=result.get("backend"),
         )
-    except Exception:
-        pass
+    except Exception as _log_exc:
+        # Surface DB logging failures in Streamlit Cloud logs so data loss
+        # does not go undetected. Never re-raise — logging must not affect UX.
+        import traceback as _tb
+        print(f"[DB log error] turn_id={turn_id}: {_log_exc}\n{_tb.format_exc()}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

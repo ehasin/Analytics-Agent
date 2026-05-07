@@ -1,8 +1,9 @@
 """
 guardrails.py — Post-narration reliability checks for the analytics agent.
 
-Provides two observability functions consumed by analyst_agent.py after the
-narrate stage. Results are appended to stage_trace and never block the response.
+Provides two functions consumed by analyst_agent.py after the narrate stage.
+Results are appended to stage_trace. When violations are detected the caller
+may also append a caveat to the narrative (see analyst_agent.py).
 
   - verify_groundedness   Regex-based check: numbers and named entities in the
                           narrative appear in query results (no LLM call).
@@ -24,6 +25,12 @@ _NUM_RE = re.compile(
     r"\b\d{1,3}(?:,\d{3})*(?:\.\d+)?[KMBkmb]?\b"
     r"|\b\d+(?:\.\d+)?[KMBkmb]?\b"
 )
+
+# Bare 4-digit years to exclude from numeric groundedness checks.
+# Year tokens like "2017" appear constantly in factual narratives but are rarely
+# present as bare integers in query results (stored as timestamps or date strings).
+# Excluding them prevents systematic false positives on this dataset (2016–2018).
+_YEAR_STOPSET: set[str] = {str(y) for y in range(2010, 2030)}
 
 _SUFFIX_MULTIPLIER: dict[str, int] = {
     "K": 1_000,
@@ -116,6 +123,11 @@ def verify_groundedness(narrative: str, queries: list[dict]) -> dict:
         num_unmatched: list[str] = []
 
         for raw, normalised in num_pairs:
+            # Skip bare year tokens — they appear in factual narratives but are
+            # almost never present as bare integers in query results (stored as
+            # date strings / timestamps), causing systematic false positives.
+            if raw.replace(",", "") in _YEAR_STOPSET:
+                continue
             raw_plain = raw.replace(",", "")
             if (
                 raw in result_text
@@ -128,7 +140,8 @@ def verify_groundedness(narrative: str, queries: list[dict]) -> dict:
 
         # ── Named entities ───────────────────────────────────
         entities = _extract_entities(narrative)
-        ent_unmatched = [e for e in entities if e not in result_text]
+        result_lower = result_text.lower()
+        ent_unmatched = [e for e in entities if e.lower() not in result_lower]
 
         unmatched_samples = (num_unmatched + ent_unmatched)[:5]
 
@@ -191,7 +204,17 @@ def check_compliance(
 
     Returns:
         {"violations": int, "details": str}
+        violations == -1 means the check failed to run (not a clean result).
     """
+    # Cap narrative length before building the prompt. Tier-0 models (e.g.
+    # llama-3.1-8b on Groq) have an 8K context window. The prompt template
+    # itself consumes ~300 tokens; leaving 3 000 chars for the narrative is a
+    # safe ceiling that prevents silent truncation and avoids a false "clean"
+    # result caused by partial input.
+    _NARRATIVE_CAP = 3_000
+    if narrative and len(narrative) > _NARRATIVE_CAP:
+        narrative = narrative[:_NARRATIVE_CAP] + "\n\n[narrative truncated for compliance check]"
+
     try:
         active_rules = rules if rules is not None else _DEFAULT_RULES
         rules_text = "\n".join(f"- {r}" for r in active_rules)
@@ -219,4 +242,7 @@ def check_compliance(
         return {"violations": violations, "details": details}
 
     except Exception:
-        return {"violations": 0, "details": "check failed"}
+        # violations=-1 signals the check did not run — distinguishable from
+        # violations=0 (clean) so dashboards and log queries can tell the
+        # difference between "passed" and "unchecked".
+        return {"violations": -1, "details": "check failed — compliance not verified"}

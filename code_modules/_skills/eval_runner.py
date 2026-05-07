@@ -244,6 +244,7 @@ def run_guardrail_eval(
     name: str = "Guardrail Validation",
     logs_dir: str | Path | None = None,
     mode: int = 0,
+    assessor_llm_fn=None,
 ) -> dict:
     """Injection-based evaluation for guardrail components.
 
@@ -268,7 +269,14 @@ def run_guardrail_eval(
     The validate callable receives the full result dict (including stage_trace
     with the guardrails record) so it can assert on grounding/compliance fields,
     retry presence, guard errors, etc.
+
+    Args:
+        assessor_llm_fn: optional separate LLM callable used for check_compliance
+                         in the narrative injection path. Enables cross-model
+                         grading so the model under test doesn't grade itself.
+                         If None, llm_fn is used (self-grading).
     """
+    compliance_fn = assessor_llm_fn if assessor_llm_fn is not None else llm_fn
     total = len(test_cases)
     passed = 0
     results = []
@@ -313,10 +321,12 @@ def run_guardrail_eval(
         # ── Apply narrative injection after execution ─────
         if inject_narr is not None:
             result["narrative"] = inject_narr
-            # Re-run guardrails on the injected narrative so results reflect it
+            # Re-run guardrails on the injected narrative so results reflect it.
+            # Use compliance_fn (assessor_llm_fn if provided) so the model under
+            # test doesn't grade its own compliance — mirrors run_eval behaviour.
             from _agent.guardrails import verify_groundedness, check_compliance
             grounding  = verify_groundedness(inject_narr, result.get("queries", []))
-            compliance = check_compliance(inject_narr, llm_fn)
+            compliance = check_compliance(inject_narr, compliance_fn)
             # Replace the guardrails record in stage_trace
             trace = result.get("stage_trace", [])
             for rec in reversed(trace):

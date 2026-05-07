@@ -165,6 +165,7 @@ def call_llm(
                 r = client.chat.completions.create(
                     model=model_name, max_tokens=max_tokens,
                     messages=[{"role": "user", "content": prompt}],
+                    timeout=180,  # 3 min ceiling — matches Claude; prevents indefinite hangs
                 )
                 return r.choices[0].message.content.strip()
 

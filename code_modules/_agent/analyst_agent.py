@@ -338,13 +338,44 @@ def analyst_agent(
     except Exception as e:
         narrative = f"(Narrative failed: {e})"
 
-    # Stage 4: Guardrails — observability only, never blocks response
+    # Stage 4: Guardrails — verify groundedness and compliance; append caveat
+    # to the narrative when issues are detected (soft-block). The response is
+    # never suppressed entirely — the caveat informs the user and preserves
+    # the data while flagging the specific concern.
     grounding = verify_groundedness(narrative, queries)
     compliance = check_compliance(narrative, llm_fn)
+
+    num_found = grounding.get("numbers_found", 0)
+    num_unmatched = grounding.get("numbers_unmatched", 0)
+    grounding_ratio = num_unmatched / num_found if num_found > 0 else 0.0
+    compliance_violations = compliance.get("violations", 0)
+
+    caveat_lines: list[str] = []
+    if grounding_ratio > 0.3:
+        samples = grounding.get("unmatched_samples", [])
+        sample_str = ", ".join(samples[:3]) if samples else ""
+        caveat_lines.append(
+            f"⚠ **Groundedness notice:** {num_unmatched} of {num_found} "
+            f"figure(s) in this response could not be verified against query "
+            f"results{(' (' + sample_str + ')') if sample_str else ''}. "
+            f"Please cross-check key numbers directly."
+        )
+    if compliance_violations > 0:
+        details = compliance.get("details", "")
+        caveat_lines.append(
+            f"⚠ **Compliance notice:** {compliance_violations} potential "
+            f"issue(s) detected in this response"
+            f"{(': ' + details) if details and details != 'none' else ''}."
+        )
+
+    if caveat_lines:
+        narrative = narrative.rstrip() + "\n\n" + "\n\n".join(caveat_lines)
+
     stage_trace.append({
-        "stage":      "guardrails",
-        "grounding":  grounding,
-        "compliance": compliance,
+        "stage":           "guardrails",
+        "grounding":       grounding,
+        "compliance":      compliance,
+        "caveat_appended": bool(caveat_lines),
     })
 
     return {
