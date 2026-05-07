@@ -28,7 +28,7 @@ import re, time
 from .prompts import (
     CLASSIFY_AND_PLAN_PROMPT, PLAN_SCOPE_RETRIEVE, PLAN_SCOPE_EXPLORE,
     NARRATIVE_PROMPT, NARRATIVE_FMT_RETRIEVE, NARRATIVE_FMT_EXPLORE, NARRATIVE_FMT_REASON,
-    CONTEXT_NOTE_PLAN, CONTEXT_NOTE_NARRATE,
+    CONTEXT_NOTE_PLAN, CONTEXT_NOTE_NARRATE, SQL_RETRY_PROMPT,
 )
 from .guardrails import verify_groundedness, check_compliance
 
@@ -282,34 +282,50 @@ def analyst_agent(
     # Stage 3b: Execute
     queries = execute_fn(queries, tables)
 
-    # Retry failed queries once with error context
+    # Surface any sqlglot parse warnings into stage_trace so dashboards can
+    # detect queries that bypassed guard_sql due to unparseable SQL.
+    guard_warnings = [
+        {"label": q.get("label", ""), "warning": q["guard_warning"]}
+        for q in queries if q.get("guard_warning")
+    ]
+    if guard_warnings:
+        stage_trace.append({"stage": "guard_warnings", "items": guard_warnings})
+
+    # Retry each failed query individually with a targeted fix prompt.
+    # Using SQL_RETRY_PROMPT (not the full CLASSIFY_AND_PLAN_PROMPT) ensures the
+    # LLM fixes only the specific SQL error without re-planning the whole question,
+    # preventing label mismatches and token waste on multi-query plans.
     failed = [q for q in queries if q.get("error") and q["code"].strip() != "DOC_LOOKUP"]
     if failed:
-        retry_context = CONTEXT_NOTE_PLAN.format(user_context=user_context) if user_context else ""
-        retry_scope = PLAN_SCOPE_RETRIEVE if mode == 0 else PLAN_SCOPE_EXPLORE
-        retry_prompt = CLASSIFY_AND_PLAN_PROMPT.format(
-            schema=schema, tables=list(tables.keys()),
-            context_note=retry_context, question=question, scope=retry_scope,
-        ) + "\n\nThe following queries failed. Rewrite ONLY the failed queries to fix the errors:\n"
-        for q in failed:
-            retry_prompt += f"\nQuery: {q['code']}\nError: {q['error']}\n"
+        retry_start = time.time()
+        retry_queries: list[dict] = []
 
-        t0 = time.time()
-        retry_text = llm_fn(retry_prompt)
+        for fq in failed:
+            retry_prompt = SQL_RETRY_PROMPT.format(
+                schema=schema,
+                tables=list(tables.keys()),
+                code=fq["code"],
+                error=fq["error"],
+                label=fq.get("label", "retry"),
+            )
+            retry_text = llm_fn(retry_prompt)
+            for block in re.findall(r"<query>(.*?)</query>", retry_text, re.DOTALL):
+                c = re.search(r"<code>(.*?)</code>", block, re.DOTALL)
+                l = re.search(r"<label>(.*?)</label>", block, re.DOTALL)
+                if c:
+                    retry_queries.append({
+                        "label": (l.group(1).strip() if l else fq.get("label", "retry")) + " (retry)",
+                        "type": fq.get("type", "primary"),
+                        "code": c.group(1).strip().rstrip(";"),
+                        "result": None, "error": None,
+                    })
+
         stage_trace.append({
-            "stage": "retry", "tier": 1, "seconds": round(time.time() - t0, 2)
+            "stage": "retry", "tier": 1,
+            "seconds": round(time.time() - retry_start, 2),
+            "retried": len(failed),
         })
-        retry_queries = []
-        for block in re.findall(r"<query>(.*?)</query>", retry_text, re.DOTALL):
-            c = re.search(r"<code>(.*?)</code>", block, re.DOTALL)
-            l = re.search(r"<label>(.*?)</label>", block, re.DOTALL)
-            if c:
-                retry_queries.append({
-                    "label": (l.group(1).strip() if l else "retry") + " (retry)",
-                    "type": "primary",
-                    "code": c.group(1).strip().rstrip(";"),
-                    "result": None, "error": None,
-                })
+
         if retry_queries:
             retry_queries = execute_fn(retry_queries, tables)
             for rq in retry_queries:

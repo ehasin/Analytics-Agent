@@ -171,14 +171,27 @@ def call_llm(
 
             elif backend == "gemini":
                 from google.genai import types
-                r = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        max_output_tokens=max_tokens,
-                    ),
-                )
-                return r.text.strip()
+                import concurrent.futures as _cf
+                # google-genai SDK does not expose a per-call timeout parameter,
+                # so we enforce the ceiling via a thread future. This prevents
+                # Gemini calls from hanging indefinitely (matches Claude/Groq behaviour).
+                def _gemini_call():
+                    return client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            max_output_tokens=max_tokens,
+                        ),
+                    ).text.strip()
+
+                with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
+                    _fut = _ex.submit(_gemini_call)
+                    try:
+                        return _fut.result(timeout=180)
+                    except _cf.TimeoutError:
+                        raise TimeoutError(
+                            "Gemini call exceeded 180s ceiling — treated as transient error"
+                        )
 
         except Exception as e:
             err_str = str(e)

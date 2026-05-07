@@ -171,7 +171,12 @@ def validate_tables(
 
     Returns a list of human-readable issue strings (empty = all ok).
     No database queries needed — we inspect the DataFrames directly.
+    Uses logging instead of print() to stay compatible with Streamlit Cloud
+    and other non-interactive environments.
     """
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+
     issues: list[str] = []
 
     for table_def in data_model.get("tables", []):
@@ -193,10 +198,8 @@ def validate_tables(
         issues.append(f"[{name}] Registered table has no schema definition")
 
     if not issues:
-        print("Schema validation: all OK")
+        _log.info("Schema validation: all OK")
     else:
-        print(f"Schema validation: {len(issues)} issue(s):")
-        for i in issues:
-            print(f"  • {i}")
+        _log.warning("Schema validation: %d issue(s): %s", len(issues), "; ".join(issues))
 
     return issues

@@ -201,6 +201,47 @@ QUERIES: (omit this section entirely if NOT can_answer)
 <query>...</query>"""
 
 
+# ── Stage 3b-retry: Targeted SQL fix prompt ─────────────────
+# Used instead of the full CLASSIFY_AND_PLAN_PROMPT so the retry call only
+# fixes the specific failing query rather than re-planning from scratch.
+# Sending the minimal context (schema + failed query + error) prevents the
+# model from generating a different set of queries with mismatched labels.
+
+SQL_RETRY_PROMPT = """\
+You are fixing a SQL query that failed against a DuckDB database.
+
+DATA MODEL:
+{schema}
+
+Available tables: {tables}
+
+The following DuckDB query failed with the error shown. Rewrite ONLY this query \
+to fix the error. Keep the same analytical intent. Preserve the original label.
+
+FAILED QUERY:
+<code>
+{code}
+</code>
+
+ERROR:
+{error}
+
+SQL rules:
+- Standard SQL compatible with DuckDB (DATE_PART, DATEDIFF, etc.)
+- No semicolons; each query independently executable
+- Only use tables and columns from the data model
+- Treat Date fields as timestamps; use >= and < for range filtering
+- Do not CAST date literals — use plain strings
+- Always use the full column expression in GROUP BY / ORDER BY, never aliases
+
+Respond with ONLY the corrected query in this format:
+<query>
+<label>{label}</label>
+<type>primary</type>
+<code>SELECT ...</code>
+</query>"""
+
+
 # ── Stage 3c: Narrate ────────────────────────────────────────
 
 NARRATIVE_FMT_RETRIEVE = """\
