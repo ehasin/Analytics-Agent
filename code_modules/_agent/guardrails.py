@@ -165,6 +165,18 @@ def verify_groundedness(narrative: str, queries: list[dict]) -> dict:
             for q in queries
             if q.get("code", "").strip() != "DOC_LOOKUP"
         ))
+
+        # If there are no data-query results to ground against (e.g. all queries
+        # were DOC_LOOKUP metadata lookups), skip the check entirely. Running
+        # groundedness against an empty haystack would flag every number in the
+        # narrative as ungrounded — a guaranteed false positive on metadata answers.
+        if not result_text.strip():
+            return {
+                "numbers_found": 0, "numbers_unmatched": 0,
+                "entities_found": 0, "entities_unmatched": 0,
+                "unmatched_samples": [], "skipped": True,
+            }
+
         result_plain = result_text.replace(",", "")
 
         # Build set of all normalised numbers present in results for rounding
