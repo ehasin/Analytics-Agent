@@ -79,10 +79,16 @@ The `guardrails` stage_trace record includes `narrate_attempts` (1–3) so dashb
 - **Range-notation bounds** — numbers like "1" and "5" in "on a 1–5 scale" are schema-level scale descriptors, not data claims.
 - **Scale denominators** — "5" in "4.09 out of 5" is a schema maximum, not a queried value.
 - **Percentage tokens** — "78.2%" or "18%" are arithmetic derivatives the LLM computes from the raw rows it was given. They never appear literally in DuckDB result rows; including them inflated the unmatched ratio on any distribution/breakdown answer (e.g. revenue by payment type).
+- **Snake_case column values** — result rows may contain `credit_card`, `debit_card`, `payment_type` while the narrative renders these in title case ("Credit Card", "Debit Card"). Entity matching checks both `result_lower` and `result_lower.replace("_", " ")` to prevent false entity flags on breakdown narratives.
 
 Returns `{numbers_found, numbers_unmatched, entities_found, entities_unmatched, unmatched_samples}`.
 
-When more than 30% of extracted numbers are unmatched, the narrative is hard-blocked and replaced — at lower rates unmatched tokens are typically noise from stylistic phrasing; above 30% the balance tips toward fabrication risk.
+The retry-and-block loop uses two independent thresholds:
+
+- **`_RETRY_THRESHOLD = 0` (absolute count)** — retry fires when `numbers_unmatched > 0`, i.e. any single unmatched number. Each retry delivers the exact failing token list via `NARRATIVE_RETRY_PROMPT`; the model is instructed to omit values not present verbatim in result rows. Setting this to zero means low-ratio cases (e.g. one derived subtraction in a 100-number narrative) are challenged rather than silently passed through.
+- **`_BLOCK_THRESHOLD = 0.20` (ratio)** — after all retries are exhausted, hard-block only when the final unmatched ratio exceeds 20%. A persistent low-ratio case (e.g. 1 unmatched out of 100 = 1%) is likely a rounding artefact that retries couldn't fully eliminate; that passes rather than erroring. A case still above 20% after retries signals genuine fabrication risk and is replaced.
+
+Design intent: *retry early and cheaply on any signal; block only when clearly unreliable.* The retry threshold is the sensitive trip-wire; the block threshold is the hard backstop. Cloners targeting production should validate both against their own dataset — higher-cardinality schemas or longer narratives may warrant a slightly higher block threshold if retry storms are observed.
 
 If all queries are `DOC_LOOKUP` (metadata questions with no data results), `verify_groundedness` returns a `skipped: True` result immediately. There are no data rows to ground against; running the check would produce a 100% unmatched false positive on every number in a schema description.
 

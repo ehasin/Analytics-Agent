@@ -212,6 +212,34 @@ def format_narrative(question, queries, mode, schema, llm_fn, user_context=None,
 # Retries only fire on deterministic groundedness failure; compliance is log-only.
 _MAX_NARRATE_ATTEMPTS = 3
 
+# ── Groundedness thresholds ──────────────────────────────────────────────────
+#
+# Two independent values govern the retry-and-block loop:
+#
+#   _RETRY_THRESHOLD (absolute count)
+#     Retry fires when numbers_unmatched exceeds this value.
+#     0 means any single unmatched number triggers a retry — the model receives
+#     the exact token list via NARRATIVE_RETRY_PROMPT and is instructed to omit
+#     those values. Retry is cheap (~1 tier-1 call) and productive; setting this
+#     to 0 catches every derived subtraction or computed sum before it reaches the
+#     user, rather than letting low-ratio cases slip through unchallenged.
+#
+#   _BLOCK_THRESHOLD (ratio, range 0–1)
+#     After all retry attempts are exhausted, hard-block only when the final
+#     unmatched ratio still exceeds this value. Persistent low-ratio unmatched
+#     tokens (e.g. 1 out of 100 = 1%) are likely rounding artefacts the model
+#     couldn't fully eliminate; those pass rather than producing a user-facing
+#     error. Setting this to 0.20 (tighter than the legacy 0.30) means moderately
+#     bad narratives are blocked rather than silently shown to the user.
+#
+#   Design intent: retry early and cheaply on any signal; block only when clearly
+#   unreliable. Cloners targeting production should validate both thresholds
+#   against their own dataset — higher-cardinality schemas or longer narratives
+#   may warrant a slightly higher block threshold if retry storms occur.
+#
+_RETRY_THRESHOLD: int   = 0     # retry when numbers_unmatched > this
+_BLOCK_THRESHOLD: float = 0.20  # hard-block when ratio > this after all retries
+
 
 def format_narrative_retry(
     question: str,
@@ -421,18 +449,20 @@ def analyst_agent(
     #
     # UX CONTRACT:
     #   - Clean result on any attempt → narrative returned unchanged, no notice.
-    #   - Groundedness failure → retry up to _MAX_NARRATE_ATTEMPTS total, feeding
-    #     the exact unmatched tokens back so the model knows what to avoid.
-    #   - All attempts exhausted → narrative replaced with a user-facing sorry
-    #     message; full detail preserved in stage_trace for analyst inspection.
+    #   - Any unmatched number → retry up to _MAX_NARRATE_ATTEMPTS, feeding the
+    #     exact unmatched tokens back via NARRATIVE_RETRY_PROMPT each time.
+    #   - All attempts exhausted with ratio > _BLOCK_THRESHOLD → narrative replaced
+    #     with a user-facing sorry message; failing narrative kept in stage_trace.
+    #   - All attempts exhausted but ratio ≤ _BLOCK_THRESHOLD → narrative passes;
+    #     low persistent unmatched count is likely harmless rounding noise.
     #   - Compliance check (tier-0 LLM) → log-only on the final narrative.
     #     Never gates retries; tier-0 models are too inconsistent for that.
     #
-    # 0.3 threshold: >30% of extracted numbers unmatched → fabrication risk.
-    # Below that, unmatched tokens are typically stylistic noise.
+    # See _RETRY_THRESHOLD / _BLOCK_THRESHOLD constants for calibration rationale.
 
     grounding: dict = {}
     guardrail_issues: list[str] = []
+    grounding_ratio: float = 0.0
     narrative = ""
 
     for narrate_attempt in range(1, _MAX_NARRATE_ATTEMPTS + 1):
@@ -462,11 +492,11 @@ def analyst_agent(
         grounding_ratio = num_unmatched / num_found if num_found > 0 else 0.0
 
         guardrail_issues = []
-        if grounding_ratio > 0.3:
+        if num_unmatched > _RETRY_THRESHOLD:
             guardrail_issues.append("numeric_validation_failed")
 
         if not guardrail_issues:
-            break  # Narrative passed — exit loop
+            break  # Narrative passed cleanly — exit loop
 
         # Log the per-attempt grounding failure so analysts can trace the retry.
         stage_trace[-1]["grounding_failed"] = True
@@ -476,9 +506,16 @@ def analyst_agent(
     # Compliance runs once on the final narrative — log-only regardless of outcome.
     compliance = check_compliance(narrative, llm_fn, schema_context=schema)
 
-    if guardrail_issues:
-        # All attempts exhausted. Replace narrative with a user-facing message;
-        # preserve the last failing narrative in stage_trace for inspection.
+    # Hard-block only when the ratio after all retries still exceeds _BLOCK_THRESHOLD.
+    # guardrail_issues being set just means the last attempt had unmatched numbers
+    # (any count > 0). The block gate is stricter: if retries reduced the ratio
+    # below 0.20, the narrative passes — low persistent unmatched counts are
+    # rounding noise that the retry loop couldn't fully eliminate.
+    should_block = bool(guardrail_issues) and grounding_ratio > _BLOCK_THRESHOLD
+
+    if should_block:
+        # Replace narrative with a user-facing message; preserve the last failing
+        # narrative in stage_trace for analyst inspection.
         original_narrative = narrative
         narrative = (
             f"Sorry, I wasn't able to generate a verified answer for this question "
@@ -492,7 +529,7 @@ def analyst_agent(
         "grounding":          grounding,
         "compliance":         compliance,
         "guardrail_issues":   guardrail_issues,
-        "narrative_replaced": bool(guardrail_issues),
+        "narrative_replaced": should_block,
         "narrate_attempts":   narrate_attempt,
         **({"original_narrative": original_narrative} if original_narrative else {}),
     })
