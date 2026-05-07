@@ -28,12 +28,20 @@ LLM-driven analytics agents fail in characteristic ways: they hallucinate number
 
 ## Architecture
 
-The agent runs a 6-stage pipeline per turn:
+The agent runs a 7-stage pipeline per turn:
 
 ```
 User question
     │
     ▼
+┌─────────────────────────────────────────────────┐
+│ 0. Injection screen (tier 0)                    │
+│    • Classify question as CLEAN / INJECTION     │
+│    • Blocks before any prompt template fires    │
+│    • Fails open on error (legitimate Qs pass)   │
+└─────────────────────────────────────────────────┘
+    │ INJECTION → decline + log + done
+    ▼ CLEAN → continue
 ┌─────────────────────────────────────────────────┐
 │ 1. Interpret turn (tier 1)                      │
 │    • Classify: standalone / continuation /      │
@@ -187,12 +195,13 @@ g_results = run_guardrail_eval(agent_fn=agent, execute_fn=execute, llm_fn=llm,
 
 ## Status
 
-`v1.6.4` — split retry/block thresholds: `_RETRY_THRESHOLD = 0` fires a retry on any single unmatched number (was >30%); `_BLOCK_THRESHOLD = 0.20` hard-blocks only when the final attempt still exceeds 20% unmatched. Low-ratio persistent cases pass rather than erroring. Entity matching extended to handle snake_case result values vs. title-case narrative entities. 50/50 standard eval · 17/17 guardrail injection eval.
+`v1.6.5` — prompt injection pre-classifier deployed as Stage 0: tier-0 LLM screen on raw question before any prompt template fires. Blocks override/exfiltration attempts while failing open on error. Pin requirements.txt (8 packages), MODEL_MAP comment. `.env.example` updated with Colab secret name guidance.
 
 ## Changelog
 
 | Version | Summary |
 |---|---|
+| `v1.6.5` | Prompt injection pre-classifier deployed as Stage 0 (`screen_for_injection` in `conversation_processor.py`). Runs on the raw question via `INJECTION_CLASSIFIER_PROMPT` (tier-0 LLM) before `interpret_turn` or any other prompt template processes the input. Blocks override instructions, system-prompt exfiltration, and identity manipulation; fails open on model error so a guardrail failure never blocks a legitimate question. Blocked turns are logged with `classification="injection_blocked"`. `requirements.txt` pinned to verified versions. MODEL_MAP documented as intentional pins. `.env.example` updated with Colab secret name mapping. |
 | `v1.6.4` | Split retry/block thresholds in the groundedness loop. `_RETRY_THRESHOLD = 0` (absolute count) fires a retry on any single unmatched number — the retry prompt delivers exact feedback so derived subtractions and computed sums get a correction pass rather than silently reaching the user. `_BLOCK_THRESHOLD = 0.20` (ratio) hard-blocks only when the final attempt still has >20% unmatched — tighter than the legacy 30%, and decoupled from the retry trigger so low-ratio persistent cases pass rather than error. Both constants are documented and tunable. Entity matching extended: snake_case result values now match title-cased narrative entities (e.g. `credit_card` → "Credit Card"). |
 | `v1.6.3` | Narrative retry loop: groundedness failure now triggers up to 2 additional narration attempts instead of an immediate hard-block. Each retry receives the exact unmatched token list via `NARRATIVE_RETRY_PROMPT` so the model knows precisely which derived values to omit. Compliance scan runs once on the final narrative only, never gates retries. `narrate_attempts` added to guardrails `stage_trace`. User-facing fallback message updated for clarity. |
 | `v1.6.2` | `verify_groundedness` false-positive fix: percentage tokens stripped before number extraction. Percentages ("78.2%", "18%") are arithmetic derivatives of query data — never literally in raw result rows — so including them inflated the unmatched ratio on breakdown/distribution answers and triggered false hard-blocks (observed in 10× easy-set loop on Q6 revenue-by-payment-type). `_PCT_RE` strips them before `_extract_numbers` runs; absolute data values are unaffected. 17-case injection eval suite (was 16). |

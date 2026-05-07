@@ -20,7 +20,8 @@ from _agent.analyst_agent import (
 )
 from _agent.conversation_processor import (
     parse_mode_command, CMD_TO_MODE, MODE_TRANSITION_MSGS,
-    interpret_turn, update_summary, enrich_trace,
+    interpret_turn, update_summary, enrich_trace, screen_for_injection,
+    _INJECTION_DECLINE,
 )
 from _skills.session_logger import SessionLogger
 
@@ -75,7 +76,7 @@ def create_chat_fn(
 
             # Per-turn wall clock + trace accumulator
             turn_start = time.time()
-            turn_trace: list[dict] = []
+            turn_trace: list[dict] = []  # injection_screen record added after screen()
 
             # ── Stage 0: parse slash command ──
             # Update mode_control / current_mode silently. Mode line is printed
@@ -103,6 +104,30 @@ def create_chat_fn(
                     continue
 
             turn_num += 1
+
+            # ── Stage 0b: injection screen ──────────────────────────
+            # Runs on the raw question before any LLM prompt template
+            # processes it. Tier-0 call; fails open on error.
+            inj_class, inj_reason, inj_record = screen_for_injection(question, llm_fn)
+            turn_trace.append(inj_record)   # always log injection_screen for observability
+            if inj_class == "INJECTION":
+                print(f"  ⚠ Injection attempt detected — declining. ({inj_reason})")
+                safe_decline = _INJECTION_DECLINE
+                display(Markdown(f"**Bot:** {safe_decline}"))
+                try:
+                    logger.log_turn(
+                        turn_num=turn_num, question=question, resolved=question,
+                        mode=current_mode, mode_name=MODE_NAMES[current_mode],
+                        classification="injection_blocked",
+                        queries=[], narrative=safe_decline, error=inj_reason,
+                        user_context=user_context, turn_type="injection",
+                        stage_trace=enrich_trace([inj_record], backend),
+                        total_seconds=round(time.time() - turn_start, 2),
+                        turn_status="injection_blocked",
+                    )
+                except Exception:
+                    pass
+                continue  # back to while loop — skip all pipeline stages
 
             # Defaults in case we fail before these are populated
             resolved = question

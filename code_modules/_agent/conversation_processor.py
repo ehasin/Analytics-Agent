@@ -30,7 +30,7 @@ import re, time
 from _agent.analyst_agent import MODE_NAMES
 from _agent.prompts import (
     INTERPRET_TURN_PROMPT, MODE_TASK_BLOCK_AUTO, MODE_RESPONSE_BLOCK_AUTO,
-    SUMMARY_UPDATE_PROMPT,
+    SUMMARY_UPDATE_PROMPT, INJECTION_CLASSIFIER_PROMPT,
 )
 from _skills.llm_backends import MODEL_MAP
 
@@ -58,6 +58,59 @@ def parse_mode_command(question: str):
     cmd = m.group(1).lower()
     cleaned = " ".join((question[:m.start()] + question[m.end():]).split())
     return cleaned, cmd
+
+
+# ── Pre-interpretation injection screen ─────────────────────
+
+_INJECTION_DECLINE = (
+    "I can only answer questions about the Olist e-commerce dataset. "
+    "I'm not able to follow instructions that attempt to override my behaviour."
+)
+
+
+def screen_for_injection(question: str, llm_fn) -> tuple[str, str, dict]:
+    """Tier-0 LLM screen for prompt injection before any other processing.
+
+    Runs on the raw user question before interpret_turn or classify_and_plan —
+    neither prompt template ever sees an adversarial payload that has already
+    been blocked here.
+
+    Returns:
+        (classification, reason, stage_record)
+        classification: "CLEAN" or "INJECTION"
+        reason:         one-line explanation from the model
+        stage_record:   {"stage": "injection_screen", "tier": 0, "seconds": float}
+
+    Fails open: on any model error the function returns "CLEAN" so a guardrail
+    failure never blocks a legitimate question. The error flag is set in
+    stage_record for observability.
+    """
+    t0 = time.time()
+    try:
+        prompt = f"{INJECTION_CLASSIFIER_PROMPT}\n\nUser input: {question}"
+        response = llm_fn(prompt, tier=0)
+
+        classification = "CLEAN"
+        reason = "(no reason returned)"
+        for line in response.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("CLASSIFICATION:"):
+                val = stripped.split(":", 1)[1].strip().upper()
+                if val in ("CLEAN", "INJECTION"):
+                    classification = val
+            elif stripped.startswith("REASON:"):
+                reason = stripped.split(":", 1)[1].strip()
+
+        elapsed = round(time.time() - t0, 2)
+        return classification, reason, {
+            "stage": "injection_screen", "tier": 0, "seconds": elapsed,
+        }
+
+    except Exception as e:
+        elapsed = round(time.time() - t0, 2)
+        return "CLEAN", f"screen error — defaulted to CLEAN: {e}", {
+            "stage": "injection_screen", "tier": 0, "seconds": elapsed, "error": True,
+        }
 
 
 # ── Interpret turn (resolve + optional mode suggestion) ──────

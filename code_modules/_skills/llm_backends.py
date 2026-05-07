@@ -19,7 +19,13 @@ import os
 import time
 
 # ── Model registry ───────────────────────────────────────────
-
+# Pinned model identifiers — intentional, not aliases.
+# Never use "latest" or unversioned aliases: they shift without notice
+# and break eval reproducibility (a new default model may score differently
+# on the 50-case suite). To update a model: change the string here, re-run
+# the full eval suite (50 standard + 17 guardrail), confirm pass rates hold,
+# then commit with the date in the message.
+# Last reviewed: 2026-05-07
 MODEL_MAP: dict[str, dict[int, str]] = {
     "claude": {
         0: "claude-haiku-4-5",

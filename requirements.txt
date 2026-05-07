@@ -1,10 +1,12 @@
-streamlit>=1.32.0
-anthropic>=0.40.0
-groq>=0.11.0
-google-genai>=0.3.0
-duckdb>=1.0.0
-pandas>=2.0.0
-psycopg2-binary>=2.9.0
-sqlglot>=23.0.0
-requests>=2.31.0
-user-agents>=2.2.0
+# Pinned as of 2026-05-07. Bump intentionally after testing.
+# To re-pin: pip install -r requirements.txt, then pip freeze | grep <package>.
+streamlit==1.55.0
+anthropic==0.87.0
+groq==1.2.0
+google-genai>=0.3.0        # pin after: pip show google-genai (Colab/cloud env)
+duckdb==1.5.1
+pandas==2.3.3
+psycopg2-binary==2.9.12
+sqlglot>=23.0.0             # pin after: pip show sqlglot (Colab/cloud env)
+requests==2.33.0
+user-agents==2.2.0
