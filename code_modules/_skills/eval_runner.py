@@ -513,7 +513,10 @@ def _format_question_log(num, q, r, classification, status, summary):
 
 def _format_guardrail_log(num, case, result, status):
     """Format one guardrail test case result as a markdown string."""
+    import json
+
     lines = [f"## GQ{num}: {case['question']}\n\n"]
+
     if case.get("inject_sql"):
         lines.append(f"**SQL injection:** `{case['inject_sql']}`\n\n")
     if case.get("inject_narrative"):
@@ -521,15 +524,64 @@ def _format_guardrail_log(num, case, result, status):
     lines.append(f"**Expected:** {case.get('expected', '')}\n\n")
     lines.append(f"**Status:** {status}\n\n")
 
+    # Classification
+    if result.get("classification"):
+        lines.append(f"**Classification:** {result['classification']}\n\n")
+
+    # Error (agent-level)
+    if result.get("error"):
+        lines.append(f"**Agent error:** {result['error']}\n\n")
+
+    # Queries: SQL + guard errors + results
+    for i, q in enumerate(result.get("queries", [])):
+        tag = q.get("type", "unknown").upper()
+        label = q.get("label", "untitled")
+        lines.append(f"### Query {i + 1} [{tag}]: {label}\n\n")
+        lines.append(f"```sql\n{q.get('code', 'N/A')}\n```\n\n")
+        if q.get("guard_error"):
+            lines.append(f"**guard_sql blocked:** `{q['guard_error']}`\n\n")
+        if q.get("guard_warning"):
+            lines.append(f"**guard_sql warning:** `{q['guard_warning']}`\n\n")
+        if q.get("result"):
+            preview = q["result"][:1000]
+            if len(q["result"]) > 1000:
+                preview += "\n... (truncated)"
+            lines.append(f"**Result:**\n```\n{preview}\n```\n\n")
+        if q.get("error"):
+            lines.append(f"**Query error:** {q['error']}\n\n")
+
+    # Narrative
+    narrative = result.get("narrative", "")
+    if narrative:
+        lines.append(f"### Narrative\n\n{narrative}\n\n")
+
+    # Guardrails record
     trace = result.get("stage_trace", [])
     guardrail_rec = next((r for r in reversed(trace) if r.get("stage") == "guardrails"), {})
     if guardrail_rec:
         lines.append(f"**Grounding:** {guardrail_rec.get('grounding', {})}\n\n")
         lines.append(f"**Compliance:** {guardrail_rec.get('compliance', {})}\n\n")
+        if guardrail_rec.get("guardrail_issues"):
+            lines.append(f"**Guardrail issues:** {guardrail_rec['guardrail_issues']}\n\n")
+        if guardrail_rec.get("narrative_replaced"):
+            orig = guardrail_rec.get("original_narrative", "")
+            if orig:
+                lines.append(f"**Original narrative (replaced):**\n> {orig[:500]}\n\n")
 
+    # Retry record
     retry_rec = next((r for r in trace if r.get("stage") == "retry"), None)
     if retry_rec:
-        lines.append(f"**Retry fired:** yes ({retry_rec.get('seconds', '?')}s)\n\n")
+        lines.append(
+            f"**Retry fired:** yes — {retry_rec.get('retried', '?')} query(s), "
+            f"{retry_rec.get('seconds', '?')}s\n\n"
+        )
+
+    # Full stage trace (collapsed)
+    if trace:
+        lines.append("<details><summary>Stage trace</summary>\n\n")
+        lines.append("```json\n")
+        lines.append(json.dumps(trace, indent=2))
+        lines.append("\n```\n\n</details>\n\n")
 
     lines.append("---\n\n")
     return "".join(lines)
