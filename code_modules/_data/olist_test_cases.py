@@ -231,8 +231,14 @@ multistage = [
     # Stage 1+2+3: Best month → top categories → consistency
     {
         "question": "Find the month with the highest total revenue. Then identify the top 3 product categories in that month. Finally, show how those same 3 categories performed in every other month of the same year — were they consistently top sellers or just spiking in that one month?",
-        "validate": lambda ans: ("november" in ans.lower() or "nov" in ans.lower()) and "2017" in ans and 
-            sum(month in ans.lower() for month in ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "dec"]) >= 6,
+        "validate": lambda ans: (
+            ("november" in ans.lower() or "nov" in ans.lower() or "2017-11" in ans)
+            and "2017" in ans
+            and (
+                sum(m in ans for m in ["2017-01","2017-02","2017-03","2017-04","2017-05","2017-06","2017-07","2017-08","2017-09","2017-10","2017-12"]) >= 6
+                or sum(m in ans.lower() for m in ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","dec"]) >= 6
+            )
+        ),
         "expected": "A month identified, top 3 categories named, then a monthly breakdown of those categories across the year"
     },
 

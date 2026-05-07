@@ -6,7 +6,8 @@ The file is written to disk AFTER the evaluation loop (including on failure),
 so partial results always get saved.
 
 Provides:
-  - run_eval   Run named test sets → summary dict
+  - run_eval          Run named test sets → summary dict
+  - run_guardrail_eval  Injection-based eval for guardrail validation
 """
 
 import datetime
@@ -23,12 +24,28 @@ def run_eval(
     name: str = "Validation",
     logs_dir: str | Path | None = None,
     mode: int = 0,
+    assessor_llm_fn=None,
+    log_prefix: str = "",
 ) -> dict:
     """Run multiple named test sets through the agent.
 
     Log is accumulated in memory and written to disk at the end,
     even if the run crashes partway through.
+
+    Args:
+        agent_fn:        callable(question, mode=int) → result dict
+        llm_fn:          LLM callable used by the agent (also used for assessment
+                         when assessor_llm_fn is None)
+        test_sets:       {set_name: [test_case_dict, ...]}
+        name:            label for this validation run
+        logs_dir:        optional path to write markdown log
+        mode:            agent response mode (0=Retrieve, 1=Explore, 2=Reason)
+        assessor_llm_fn: optional separate LLM callable for assessment, enabling
+                         cross-model grading. If None, llm_fn is used (self-grading).
+                         Signature: callable(prompt: str) → str
     """
+    assess_fn = assessor_llm_fn if assessor_llm_fn is not None else llm_fn
+
     total_questions = sum(len(qs) for qs in test_sets.values())
     total_passed = 0
     total_count = 0
@@ -43,6 +60,8 @@ def run_eval(
 
     print(f"\n  Model Validation: {', '.join(test_sets.keys())}")
     print(f"  {total_questions} questions across {len(test_sets)} set(s)")
+    if assessor_llm_fn is not None:
+        print(f"  Cross-model grading: enabled")
 
     # ── Main evaluation loop ─────────────────────────────
     try:
@@ -94,7 +113,7 @@ def run_eval(
                 # ── LLM assessment ───────────────────
                 narrative = r.get("narrative", "(no narrative)")
                 try:
-                    summary = llm_fn(EVAL_SUMMARY_PROMPT.format(
+                    summary = assess_fn(EVAL_SUMMARY_PROMPT.format(
                         question=q["question"],
                         expected=q["expected"],
                         narrative=narrative[:4000],
@@ -120,7 +139,7 @@ def run_eval(
                 ]):
                     success = True
                     status = "PASS (override: assessment contradicts lambda)"
-                    
+
                 # ── Console output ───────────────────
                 print(f"\n  Q{global_q_num}: {q['question']}")
                 narr_preview = narrative[:300] + ("..." if len(narrative) > 300 else "")
@@ -186,7 +205,6 @@ def run_eval(
         display_text = q_text[:42] + "..." if len(q_text) > 45 else q_text
         display_set = sn[:20]
         print(f"  {display_set:<20} {display_text:<45} {st}")
-        # Assessment on next line, indented
         smry_preview = smry[:120] + ("..." if len(smry) > 120 else "")
         print(f"  {'':20} ↳ {smry_preview}")
 
@@ -202,6 +220,7 @@ def run_eval(
             total_passed=total_passed, total_count=total_count,
             by_set=by_set, summary_rows=summary_rows,
             body_parts=log_body_parts, critical_error=critical_error,
+            log_prefix=log_prefix,
         )
 
         from IPython.display import display, HTML
@@ -217,18 +236,210 @@ def run_eval(
     }
 
 
+# ── Guardrail injection eval ─────────────────────────────────
+
+def run_guardrail_eval(
+    agent_fn,
+    execute_fn,
+    llm_fn,
+    test_cases: list[dict],
+    name: str = "Guardrail Validation",
+    logs_dir: str | Path | None = None,
+    mode: int = 0,
+    assessor_llm_fn=None,
+    log_prefix: str = "",
+    schema_context: str = "",
+) -> dict:
+    """Injection-based evaluation for guardrail components.
+
+    Each test case may specify injection at one or more pipeline stages:
+      - inject_sql:       str — replaces the first LLM-planned query's SQL on the
+                          first execute_fn call only. The retry (if triggered) uses
+                          the LLM's real SQL, letting us verify retry recovery.
+      - inject_narrative: str — replaces the LLM's narrative before guardrails run.
+
+    Prompt-level injection needs no special support: write the adversarial text
+    directly as the question field.
+
+    Test case structure:
+        {
+            "question":          str,
+            "inject_sql":        str | None,
+            "inject_narrative":  str | None,
+            "expected":          str,   # human-readable description for the log
+            "validate":          callable(result_dict) → bool,
+        }
+
+    The validate callable receives the full result dict (including stage_trace
+    with the guardrails record) so it can assert on grounding/compliance fields,
+    retry presence, guard errors, etc.
+
+    Args:
+        assessor_llm_fn: optional separate LLM callable used for check_compliance
+                         in the narrative injection path. Enables cross-model
+                         grading so the model under test doesn't grade itself.
+                         If None, llm_fn is used (self-grading).
+    """
+    compliance_fn = assessor_llm_fn if assessor_llm_fn is not None else llm_fn
+    total = len(test_cases)
+    passed = 0
+    results = []
+    log_parts: list[str] = []
+    started = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    print(f"\n  Guardrail Validation: {name}")
+    print(f"  {total} injection case(s)")
+
+    for i, case in enumerate(test_cases):
+        q_num = i + 1
+        question      = case["question"]
+        inject_sql    = case.get("inject_sql")
+        inject_narr   = case.get("inject_narrative")
+        expected      = case.get("expected", "")
+
+        # ── Build injecting execute_fn ────────────────────
+        # Use a class to hold injection state so the closure is explicit and
+        # readable — avoids the mutable-list [True] nonlocal workaround.
+        class _Injector:
+            fired = False
+
+        _inj = _Injector()
+
+        def _injecting_execute(queries, tables, _isql=inject_sql):
+            if _isql and not _inj.fired:
+                _inj.fired = True
+                if queries:
+                    queries[0]["code"] = _isql
+                    queries[0]["result"] = None
+                    queries[0]["error"] = None
+            return execute_fn(queries, tables)
+
+        # ── Run agent with injections ─────────────────────
+        try:
+            result = agent_fn(
+                question,
+                mode=mode,
+                execute_fn=_injecting_execute,
+            )
+        except Exception as e:
+            result = {
+                "error": str(e), "narrative": "", "queries": [],
+                "stage_trace": [], "classification": "error",
+            }
+
+        # ── Apply narrative injection after execution ─────
+        if inject_narr is not None:
+            result["narrative"] = inject_narr
+            # Re-run guardrails on the injected narrative so results reflect it.
+            # Use check_compliance_deterministic (no LLM call) — consistent with
+            # the pipeline and eliminates assessor self-grading bias entirely.
+            # compliance_fn / assessor_llm_fn no longer used for this path.
+            from _agent.guardrails import verify_groundedness, check_compliance_deterministic
+            grounding  = verify_groundedness(inject_narr, result.get("queries", []))
+            compliance = check_compliance_deterministic(inject_narr, schema_context=schema_context)
+            # Replace the guardrails record in stage_trace
+            trace = result.get("stage_trace", [])
+            for rec in reversed(trace):
+                if rec.get("stage") == "guardrails":
+                    rec["grounding"]  = grounding
+                    rec["compliance"] = compliance
+                    break
+            else:
+                trace.append({
+                    "stage": "guardrails",
+                    "grounding": grounding,
+                    "compliance": compliance,
+                })
+
+        # ── Validate ──────────────────────────────────────
+        try:
+            success = case["validate"](result)
+            status = "PASS" if success else "FAIL"
+        except Exception as ve:
+            success = False
+            status = f"ERROR in validate: {ve}"
+
+        if success:
+            passed += 1
+
+        # ── Console output ────────────────────────────────
+        guardrail_rec = next(
+            (r for r in reversed(result.get("stage_trace", [])) if r.get("stage") == "guardrails"),
+            {},
+        )
+        grounding_summary = guardrail_rec.get("grounding", {})
+        compliance_summary = guardrail_rec.get("compliance", {})
+
+        print(f"\n  Q{q_num}: {question[:80]}")
+        if inject_sql:
+            print(f"  ↳ SQL injection: {inject_sql[:60]}")
+        if inject_narr:
+            print(f"  ↳ Narrative injection: {inject_narr[:60]}...")
+        print(f"  Grounding: {grounding_summary}")
+        print(f"  Compliance: {compliance_summary}")
+        print(f"  → {status}")
+
+        # ── Log buffer ────────────────────────────────────
+        log_parts.append(_format_guardrail_log(q_num, case, result, status))
+
+        results.append({
+            "question":   question,
+            "inject_sql": inject_sql,
+            "inject_narrative": inject_narr,
+            "expected":   expected,
+            "status":     status,
+            "grounding":  grounding_summary,
+            "compliance": compliance_summary,
+            "stage_trace": result.get("stage_trace", []),
+        })
+
+    # ── Grand summary ─────────────────────────────────────
+    print(f"\n{'=' * 60}")
+    print(f"  {name}: {passed}/{total} passed")
+    print(f"{'=' * 60}")
+
+    # ── Write log ─────────────────────────────────────────
+    log_path = None
+    if logs_dir:
+        logs_dir = Path(logs_dir)
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        ts = started.replace("-", "_").replace(" ", "_").replace(":", "_")[:16]
+        fname = f"{log_prefix}guardrail_log_{ts}.md" if log_prefix else f"guardrail_log_{ts}.md"
+        log_path = logs_dir / fname
+        header = (
+            f"# {name}\n\n**Started:** {started}\n**Mode:** {mode}\n"
+            f"**Cases:** {total}\n\n## Summary: {passed}/{total} passed\n\n---\n\n"
+        )
+        log_path.write_text(header + "".join(log_parts), encoding="utf-8")
+
+        try:
+            from IPython.display import display, HTML
+            display(HTML(f'<br>📄 <b>{log_path.name}</b> saved to <code>{log_path}</code>'))
+        except Exception:
+            pass
+
+    return {
+        "name": name,
+        "total_passed": passed,
+        "total_count": total,
+        "results": results,
+        "log_path": str(log_path) if log_path else None,
+    }
+
+
 # ── Log file assembly ────────────────────────────────────────
 
 def _write_log_file(
     logs_dir, name, started, mode, test_sets, total_questions,
     total_passed, total_count, by_set, summary_rows, body_parts,
-    critical_error,
+    critical_error, log_prefix: str = "",
 ):
     """Assemble the log: header → summary → detail body. Write once."""
     logs_dir = Path(logs_dir)
     logs_dir.mkdir(parents=True, exist_ok=True)
     ts_file = started.replace("-", "_").replace(" ", "_").replace(":", "_")[:16]
-    log_path = logs_dir / f"validation_log_{ts_file}.md"
+    fname = f"{log_prefix}validation_log_{ts_file}.md" if log_prefix else f"validation_log_{ts_file}.md"
+    log_path = logs_dir / fname
 
     parts = []
 
@@ -302,6 +513,91 @@ def _format_question_log(num, q, r, classification, status, summary):
     return "".join(lines)
 
 
+def _format_guardrail_log(num, case, result, status):
+    """Format one guardrail test case result as a markdown string."""
+    import json
+
+    lines = [f"## GQ{num}: {case['question']}\n\n"]
+
+    if case.get("inject_sql"):
+        lines.append(f"**SQL injection:** `{case['inject_sql']}`\n\n")
+    if case.get("inject_narrative"):
+        lines.append(f"**Narrative injection:**\n> {case['inject_narrative']}\n\n")
+    lines.append(f"**Expected:** {case.get('expected', '')}\n\n")
+    lines.append(f"**Status:** {status}\n\n")
+
+    # Classification
+    if result.get("classification"):
+        lines.append(f"**Classification:** {result['classification']}\n\n")
+
+    # Error (agent-level)
+    if result.get("error"):
+        lines.append(f"**Agent error:** {result['error']}\n\n")
+
+    # Queries: SQL + guard errors + results
+    for i, q in enumerate(result.get("queries", [])):
+        tag = q.get("type", "unknown").upper()
+        label = q.get("label", "untitled")
+        lines.append(f"### Query {i + 1} [{tag}]: {label}\n\n")
+        lines.append(f"```sql\n{q.get('code', 'N/A')}\n```\n\n")
+        if q.get("guard_error"):
+            lines.append(f"**guard_sql blocked:** `{q['guard_error']}`\n\n")
+        if q.get("guard_warning"):
+            lines.append(f"**guard_sql warning:** `{q['guard_warning']}`\n\n")
+        if q.get("result"):
+            preview = q["result"][:1000]
+            if len(q["result"]) > 1000:
+                preview += "\n... (truncated)"
+            lines.append(f"**Result:**\n```\n{preview}\n```\n\n")
+        if q.get("error"):
+            lines.append(f"**Query error:** {q['error']}\n\n")
+
+    # Narrative
+    narrative = result.get("narrative", "")
+    if narrative:
+        lines.append(f"### Narrative\n\n{narrative}\n\n")
+
+    # Guardrails record
+    trace = result.get("stage_trace", [])
+    guardrail_rec = next((r for r in reversed(trace) if r.get("stage") == "guardrails"), {})
+    if guardrail_rec:
+        lines.append(f"**Grounding:** {guardrail_rec.get('grounding', {})}\n\n")
+        lines.append(f"**Compliance:** {guardrail_rec.get('compliance', {})}\n\n")
+        if guardrail_rec.get("guardrail_issues"):
+            lines.append(f"**Guardrail issues:** {guardrail_rec['guardrail_issues']}\n\n")
+        if guardrail_rec.get("narrative_replaced"):
+            orig = guardrail_rec.get("original_narrative", "")
+            if orig:
+                lines.append(f"**Original narrative (replaced):**\n> {orig[:500]}\n\n")
+
+    # Guard blocks (queries blocked by guard_sql before retry replaced them)
+    guard_blocks_rec = next((r for r in trace if r.get("stage") == "guard_blocks"), None)
+    if guard_blocks_rec:
+        for gb in guard_blocks_rec.get("items", []):
+            lines.append(
+                f"**guard_sql blocked** [{gb.get('label', '')}]: "
+                f"`{gb.get('blocked_code', '')[:80]}` — {gb.get('error', '')}\n\n"
+            )
+
+    # Retry record
+    retry_rec = next((r for r in trace if r.get("stage") == "retry"), None)
+    if retry_rec:
+        lines.append(
+            f"**Retry fired:** yes — {retry_rec.get('retried', '?')} query(s), "
+            f"{retry_rec.get('seconds', '?')}s\n\n"
+        )
+
+    # Full stage trace (collapsed)
+    if trace:
+        lines.append("<details><summary>Stage trace</summary>\n\n")
+        lines.append("```json\n")
+        lines.append(json.dumps(trace, indent=2))
+        lines.append("\n```\n\n</details>\n\n")
+
+    lines.append("---\n\n")
+    return "".join(lines)
+
+
 def _gdrive_link(log_path):
     """Return an HTML string with a link to the log file's parent folder on GDrive.
 
@@ -326,7 +622,6 @@ def _gdrive_link(log_path):
         creds, _ = google.auth.default()
         service = build("drive", "v3", credentials=creds)
 
-        # Walk folder path to find the logs folder ID
         folder_parts = Path(drive_rel).parent.parts
         parent_id = "root"
         for folder_name in folder_parts:

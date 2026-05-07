@@ -1,0 +1,1046 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Code Review — Analytics Agent v1.6.7</title>
+<style>
+:root {
+  --bg:       #0e1117;
+  --bg2:      #161b22;
+  --card:     #1c2129;
+  --text:     #e6edf3;
+  --muted:    #7d8590;
+  --border:   #30363d;
+  --green:    #3fb950;
+  --yellow:   #e3b341;
+  --red:      #f85149;
+  --blue:     #58a6ff;
+  --purple:   #bc8cff;
+  --orange:   #d29922;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 14px; line-height: 1.6; }
+a { color: var(--blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Layout */
+.wrapper { max-width: 1100px; margin: 0 auto; padding: 32px 24px 64px; }
+h1 { font-size: 1.7rem; font-weight: 700; margin-bottom: 4px; }
+h2 { font-size: 1.2rem; font-weight: 600; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+h3 { font-size: 1rem; font-weight: 600; margin: 24px 0 10px; color: var(--text); }
+h4 { font-size: 0.9rem; font-weight: 600; margin: 16px 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+p { margin-bottom: 12px; }
+ul, ol { margin: 8px 0 12px 20px; }
+li { margin-bottom: 4px; }
+code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: 12px; background: var(--bg2); padding: 1px 5px; border-radius: 3px; color: var(--text); }
+pre { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 16px; overflow-x: auto; margin: 12px 0; }
+pre code { background: none; padding: 0; font-size: 12px; }
+
+/* TOC */
+.toc { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px 24px; margin-bottom: 40px; }
+.toc h3 { margin-top: 0; margin-bottom: 12px; font-size: 0.85rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.toc ol { margin-left: 16px; }
+.toc li { margin-bottom: 6px; font-size: 0.9rem; }
+
+/* Verdict callout */
+.verdict { border-left: 4px solid; border-radius: 0 6px 6px 0; padding: 16px 20px; margin: 20px 0; background: var(--card); }
+.verdict.good  { border-color: var(--green); }
+.verdict.warn  { border-color: var(--yellow); }
+.verdict.bad   { border-color: var(--red); }
+.verdict.blue  { border-color: var(--blue); }
+.verdict strong { display: block; margin-bottom: 6px; font-size: 0.95rem; }
+
+/* Score grid */
+.scorecard { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin: 20px 0; }
+.score-item { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+.score-label { font-size: 0.78rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 8px; }
+.score-value { font-size: 1.3rem; font-weight: 700; }
+.score-value.good   { color: var(--green); }
+.score-value.warn   { color: var(--yellow); }
+.score-value.bad    { color: var(--red); }
+.score-sub { font-size: 0.76rem; color: var(--muted); margin-top: 4px; }
+
+/* Tables */
+.table-wrap { overflow-x: auto; margin: 16px 0; }
+table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+th { background: var(--bg2); color: var(--muted); font-weight: 600; text-align: left; padding: 8px 12px; border: 1px solid var(--border); font-size: 0.78rem; text-transform: uppercase; letter-spacing: .04em; }
+td { padding: 8px 12px; border: 1px solid var(--border); vertical-align: top; }
+tr:nth-child(even) td { background: var(--bg2); }
+td.pass { color: var(--green); font-weight: 600; }
+td.warn { color: var(--yellow); font-weight: 600; }
+td.fail { color: var(--red); font-weight: 600; }
+td.na   { color: var(--muted); }
+
+/* Legend dots */
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.dot.green  { background: var(--green); }
+.dot.yellow { background: var(--yellow); }
+.dot.red    { background: var(--red); }
+.dot.muted  { background: var(--muted); }
+.legend { display: flex; gap: 20px; font-size: 0.8rem; color: var(--muted); margin-bottom: 16px; flex-wrap: wrap; }
+
+/* Risk items */
+.risk { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 14px 16px; margin: 12px 0; }
+.risk-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.risk-sev { font-size: 0.72rem; font-weight: 700; padding: 2px 8px; border-radius: 4px; text-transform: uppercase; letter-spacing: .04em; }
+.risk-sev.high   { background: rgba(248,81,73,.15); color: var(--red); }
+.risk-sev.medium { background: rgba(227,179,65,.15); color: var(--yellow); }
+.risk-sev.low    { background: rgba(63,185,80,.15); color: var(--green); }
+.risk-title { font-weight: 600; font-size: 0.9rem; }
+.risk dl { display: grid; grid-template-columns: 90px 1fr; gap: 4px 12px; font-size: 0.82rem; }
+.risk dt { color: var(--muted); font-weight: 600; }
+.risk dd { color: var(--text); margin: 0; }
+
+/* Section panels */
+.panel { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px 24px; margin: 16px 0; }
+.panel h4 { margin-top: 0; }
+
+/* Punch list */
+.punch { font-weight: 700; }
+
+/* Footer */
+footer { border-top: 1px solid var(--border); margin-top: 60px; padding-top: 20px; color: var(--muted); font-size: 0.8rem; }
+
+/* Pipeline diagram */
+.pipeline { font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 20px; line-height: 1.8; }
+
+/* Print */
+@media print {
+  body { background: white; color: black; }
+  .verdict, .panel, .risk, .score-item { border: 1px solid #ccc; }
+}
+</style>
+</head>
+<body>
+<div class="wrapper">
+
+<!-- Header -->
+<div style="margin-bottom:32px;">
+  <p style="color:var(--muted);font-size:0.8rem;margin-bottom:8px;">CODE &amp; PRODUCTION-READINESS REVIEW</p>
+  <h1>Analytics Agent</h1>
+  <p style="color:var(--muted);font-size:0.9rem;margin-top:6px;">
+    v1.6.7 · <code>feature/guardrails</code> · Reviewed 2026-05-07 · <span style="color:var(--yellow)">Updated 2026-05-08</span>
+  </p>
+</div>
+
+<!-- TOC -->
+<div class="toc">
+  <h3>Contents</h3>
+  <ol>
+    <li><a href="#tldr">TL;DR &amp; Verdict</a></li>
+    <li><a href="#source">Source Facts</a></li>
+    <li><a href="#what">What It Is</a></li>
+    <li><a href="#arch">Architecture Review</a></li>
+    <li><a href="#code">Code-Quality Assessment</a></li>
+    <li><a href="#eval">The Eval Claim</a></li>
+    <li><a href="#prod">Production-Readiness Scorecard</a></li>
+    <li><a href="#risks">Trust Issues &amp; Risks</a></li>
+    <li><a href="#fit">Fit for the Stated Use Case</a></li>
+    <li><a href="#harden">What to Restrict / Harden</a></li>
+    <li><a href="#strengths">Strengths Summary</a></li>
+    <li><a href="#gaps">Gaps &amp; Weaknesses Summary</a></li>
+    <li><a href="#punch">Prioritized Punch List</a></li>
+    <li><a href="#bottom">Bottom Line</a></li>
+  </ol>
+</div>
+
+
+<!-- 1. TL;DR -->
+<h2 id="tldr">1. TL;DR &amp; Verdict</h2>
+
+<div class="verdict good">
+  <strong>Headline</strong>
+  This is a genuinely well-engineered text-to-SQL analytics agent with one of the more rigorous groundedness and hallucination-control architectures in the open-source space. The pipeline design, prompt discipline, deterministic verification layer, and injection-based eval harness are all production-quality thinking — not portfolio decoration. Since the original review (v1.6.4), prompt injection screening has been deployed as Stage 0, compliance validation has been made deterministic and promoted to a gate, and a column allowlist has been added to the execution layer. The remaining gaps are operational: no auth, no rate limiting, no cost controls, no CI/CD. Anyone cloning this for production needs to add those layers. The codebase gives them a solid foundation to build on.
+</div>
+
+<h3>Deployment-Pattern Verdicts</h3>
+<div class="legend">
+  <span><span class="dot green"></span>Safe</span>
+  <span><span class="dot yellow"></span>Safe with restrictions</span>
+  <span><span class="dot red"></span>Not safe</span>
+  <span><span class="dot muted"></span>Not applicable</span>
+</div>
+<div class="table-wrap">
+<table>
+  <tr><th>Pattern</th><th>Verdict</th><th>Condition</th></tr>
+  <tr><td>Portfolio / interview piece</td><td class="pass">Deploy</td><td>As-is. Well-documented, live demo, honest about gaps.</td></tr>
+  <tr><td>Reference architecture for production clones</td><td class="pass">Deploy</td><td>The core pipeline and guardrail design are reference-quality. Cloners must add auth, rate limiting, cost controls, model pinning, and CI before going live.</td></tr>
+  <tr><td>Supervised internal analytics tool</td><td class="warn">Deploy with restrictions</td><td>Add auth + rate limiting. Disable Reason mode for anonymous users. Review DB logging for PII before enabling.</td></tr>
+  <tr><td>Customer-facing production service</td><td class="fail">Do not deploy</td><td>Missing auth, rate limiting, cost guards, model pinning, monitoring, and rollback path. Prompt injection screening and column allowlisting added in v1.6.5/v1.6.6.</td></tr>
+  <tr><td>Unsupervised automation</td><td class="fail">Do not deploy</td><td>Outputs are validated but not human-reviewed. Compliance now gates retries (deterministic, v1.6.6) but analytical interpretation errors are not detected. Not appropriate for automated decision pipelines.</td></tr>
+</table>
+</div>
+
+<h3>Scorecard</h3>
+<div class="scorecard">
+  <div class="score-item">
+    <div class="score-label">Code Quality</div>
+    <div class="score-value good">8/10</div>
+    <div class="score-sub">Strong structure, minor gaps</div>
+  </div>
+  <div class="score-item">
+    <div class="score-label">Architecture</div>
+    <div class="score-value good">9/10</div>
+    <div class="score-sub">Cleanest part of the system</div>
+  </div>
+  <div class="score-item">
+    <div class="score-label">Input/Output Reliability</div>
+    <div class="score-value warn">7/10</div>
+    <div class="score-sub">Good; eval variance unknown</div>
+  </div>
+  <div class="score-item">
+    <div class="score-label">Deterministic Safeguards</div>
+    <div class="score-value good">9/10</div>
+    <div class="score-sub">Compliance now deterministic gate (v1.6.6)</div>
+  </div>
+  <div class="score-item">
+    <div class="score-label">LLM Prompt Safeguards</div>
+    <div class="score-value good">9/10</div>
+    <div class="score-sub">Among the best seen in OSS</div>
+  </div>
+  <div class="score-item">
+    <div class="score-label">LLM Verification Layer</div>
+    <div class="score-value good">8/10</div>
+    <div class="score-sub">Deterministic; well-designed</div>
+  </div>
+  <div class="score-item">
+    <div class="score-label">Eval / Test Rigor</div>
+    <div class="score-value warn">6/10</div>
+    <div class="score-sub">Good design; small N; self-grading default</div>
+  </div>
+  <div class="score-item">
+    <div class="score-label">Security</div>
+    <div class="score-value warn">5/10</div>
+    <div class="score-sub">Exec surface ok; ops gaps critical</div>
+  </div>
+  <div class="score-item">
+    <div class="score-label">Production Readiness</div>
+    <div class="score-value bad">3/10</div>
+    <div class="score-sub">As direct deployment; 7/10 as reference arch</div>
+  </div>
+  <div class="score-item">
+    <div class="score-label">Target-Use-Case Fit</div>
+    <div class="score-value good">9/10</div>
+    <div class="score-sub">Exactly what it claims to be</div>
+  </div>
+</div>
+
+
+<!-- 2. Source Facts -->
+<h2 id="source">2. Source Facts</h2>
+<div class="panel">
+<div class="table-wrap">
+<table>
+  <tr><th>Property</th><th>Value</th></tr>
+  <tr><td>Source type</td><td>Local git repository</td></tr>
+  <tr><td>Root folder</td><td><code>analytics-agent/</code></td></tr>
+  <tr><td>Active branch</td><td><code>feature/guardrails</code> (not merged to <code>main</code>)</td></tr>
+  <tr><td>Language</td><td>Python 3.10+</td></tr>
+  <tr><td>Approx LOC</td><td>~4,800 total: <code>streamlit_app.py</code> 1,534 lines (CSS/JS-heavy), <code>analyst_agent.py</code> ~510, <code>prompts.py</code> ~430, <code>eval_runner.py</code> ~650, <code>guardrails.py</code> ~400, <code>duckdb_utils.py</code> ~210, <code>llm_backends.py</code> ~225</td></tr>
+  <tr><td>Dependencies</td><td><code>streamlit, anthropic, groq, google-genai, duckdb, pandas, psycopg2-binary, sqlglot, requests, user-agents</code></td></tr>
+  <tr><td>Version pinning</td><td>8 of 10 packages pinned with <code>==</code> in <code>requirements.txt</code> (v1.6.5). <code>google-genai</code> and <code>sqlglot</code> at <code>&gt;=</code> pending Colab version confirmation. No lockfile.</td></tr>
+  <tr><td>Entrypoints</td><td><code>streamlit_app.py</code> (Streamlit app); <code>notebooks/Agentic_AI_Analytics_Bot.ipynb</code> (Colab eval entry point)</td></tr>
+  <tr><td>Test files</td><td><code>_data/olist_test_cases.py</code> (50 cases), <code>_data/guardrail_test_cases.py</code> (17 cases) — lambda validators, no pytest</td></tr>
+  <tr><td>CI/CD</td><td>None found</td></tr>
+  <tr><td>Environment / config</td><td><code>requirements.txt</code>; Streamlit secrets or env vars for API keys; <code>.env.example</code> added in v1.6.5 with Colab secret name mapping</td></tr>
+  <tr><td>README / docs</td><td>README.md (thorough), <code>docs/architecture.md</code>, <code>docs/validation.md</code></td></tr>
+  <tr><td>Deployment artifacts</td><td>None (Streamlit Cloud deployment via <code>streamlit_app.py</code>)</td></tr>
+  <tr><td>Live demo</td><td><a href="https://analytics-agent-demo.streamlit.app" target="_blank">analytics-agent-demo.streamlit.app</a></td></tr>
+  <tr><td>License</td><td>MIT</td></tr>
+</table>
+</div>
+</div>
+
+
+<!-- 3. What It Is -->
+<h2 id="what">3. What It Is</h2>
+<p>A multi-stage natural-language-to-SQL analytics agent running against the Olist Brazilian e-commerce dataset (~100k orders, 7 tables, 2016–2018). The user asks a business question in plain English; the agent classifies it, generates DuckDB SQL, executes it in-memory, narrates the findings, and runs a deterministic groundedness check on the narrative before returning it. The pipeline has three response modes (Retrieve, Explore, Reason) that control query scope and model tier, with automatic mode selection per turn. Three LLM backends are supported interchangeably (Anthropic Claude, Groq, Google Gemini) via a unified wrapper.</p>
+<p>The system is designed around a specific thesis: LLM-driven analytics agents fail in characteristic, predictable ways (hallucinated numbers, fabricated column names, confident prose over data gaps). Every pipeline stage is an explicit countermeasure to one of those failure modes — conservative classification before SQL generation, a targeted SQL retry prompt, an anti-fabrication narrative prompt with numeric-fidelity rules, a retry loop on any unmatched number, and a deterministic regex-based groundedness verifier that does not depend on the model behaving well. The 50-case eval suite and 17-case guardrail injection eval are designed to stress-test those countermeasures specifically.</p>
+<p>The primary artifact is the <code>code_modules/</code> Python package — a production-grade refactor of a Colab notebook PoC. The Streamlit app is a demo frontend. The notebook is retained as the eval entry point. The target audience is engineers who want to understand how to build reliable text-to-SQL agents, and who may apply the same architecture to their own datasets and schemas.</p>
+
+
+<!-- 4. Architecture -->
+<h2 id="arch">4. Architecture Review</h2>
+
+<h3>Request/Response Pipeline</h3>
+<div class="pipeline">
+User question
+    │
+    ▼
+[0] screen_for_injection (tier 0) ← NEW v1.6.5
+    • INJECTION_CLASSIFIER_PROMPT — classify CLEAN / INJECTION
+    • blocks before any prompt template fires
+    • fails open on error (legit questions always pass)
+    │ INJECTION → decline + log; CLEAN → continue
+    ▼
+[1] interpret_turn (tier 1)
+    • classify: standalone / continuation / pivot / correction
+    • resolve follow-ups to standalone form
+    • suggest mode (auto) or accept manual lock
+    │
+    ▼
+[2] classify_and_plan (tier 1, single call)
+    • can_answer / cant_answer / clarifications_needed
+    • generate DuckDB SQL query plan
+    • surface analytical assumptions
+    │
+    ▼
+[3] execute (DuckDB in-memory)
+    • guard_sql (sqlglot AST, SELECT-only, blocks system tables)
+    • _validate_columns (column allowlist from DataFrames) ← NEW v1.6.6
+    • execute each query against registered DataFrames
+    • on error → SQL_RETRY_PROMPT (targeted, not full replanning)
+    │
+    ▼
+[4] narrate + groundedness + compliance retry loop (up to 3 attempts)
+    • attempt 1: NARRATIVE_PROMPT (numeric fidelity, anti-fabrication)
+      → verify_groundedness (regex, no LLM)
+      → check_compliance_deterministic (regex, no LLM) ← NEW v1.6.6
+      → both pass? done. any failure? attempt 2
+    • attempts 2–3: NARRATIVE_RETRY_PROMPT
+      (unmatched tokens + compliance violation samples fed back)
+      → verify_groundedness + check_compliance_deterministic again
+      → pass? done. groundedness ratio > 0.20 after attempt 3? replace with error
+    │
+    ▼
+[5] update_summary (tier 0)
+    • rolling session context ≤200 words
+</div>
+
+<h3>What Is Smart About It</h3>
+<ul>
+  <li><strong>Classification before SQL generation</strong> — <code>can_answer / cant_answer / clarifications_needed</code> runs as part of the same LLM call as planning. Merging them prevents the inconsistency where classify says "can_answer" but plan generates queries against absent tables. Conservative bias toward <code>clarifications_needed</code> over guessing.</li>
+  <li><strong>Targeted SQL retry prompt</strong> — <code>SQL_RETRY_PROMPT</code> sends only schema + failing query + error. The original planning prompt is never re-sent on retry. This prevents the model from re-planning all queries with different labels, which would break downstream matching. Same principle as the narrative retry: minimal context, targeted fix.</li>
+  <li><strong>Deterministic groundedness verifier</strong> — <code>verify_groundedness</code> in <code>guardrails.py</code> uses regex to extract numbers and named entities from the narrative and checks them against raw query results. No LLM call. Multiple false-positive exclusion classes (year tokens, range bounds, scale denominators, percentage tokens, snake_case entities) are explicitly handled. This is a real code-side verification layer, not a prompt instruction.</li>
+  <li><strong>Split retry/block thresholds</strong> — <code>_RETRY_THRESHOLD = 0</code> retries on any unmatched number (cheap, productive, catches derived arithmetic). <code>_BLOCK_THRESHOLD = 0.20</code> hard-blocks only when the final attempt is still clearly bad. Low-ratio persistent noise passes rather than erroring. The design intent is explicit in the code comments.</li>
+  <li><strong>Prompt injection screen as Stage 0 (v1.6.5)</strong> — <code>screen_for_injection()</code> runs a tier-0 LLM call on the raw question before <code>interpret_turn</code> or any other prompt template processes it. Designed with correct risk asymmetry: fails open (defaults to CLEAN on model error) so a guardrail failure never blocks a legitimate question. False positive = polite decline; false negative has classify_and_plan as backstop. Blocked turns logged with <code>classification="injection_blocked"</code>.</li>
+  <li><strong>Deterministic compliance gate (v1.6.6)</strong> — <code>check_compliance_deterministic()</code> replaces tier-0 LLM compliance scan for rules 1 (approximation language), 2 (evaluative adjectives), 4 (currency drift) with pure regex/word-list — zero LLM cost per turn, zero model-variability risk. Rules 3 and 5 dropped: 3 (motivational inference) has no reliable deterministic signal; 5 (unsupported claims) is already covered by <code>verify_groundedness</code>. Every rule either gates or gets dropped — log-only rules provide no stakeholder trust guarantee.</li>
+  <li><strong>Column allowlist from DataFrames (v1.6.6)</strong> — <code>execute_queries</code> auto-builds <code>{table: frozenset(cols)}</code> from the DataFrames it already holds, guaranteeing sync with the actual schema. <code>_validate_columns()</code> walks the sqlglot AST for qualified column references; unqualified names and CTE aliases skipped to avoid false positives. <code>build_column_allowlist(data_model)</code> also available as public API for restricted-column annotations in <code>data_model.json</code>.</li>
+  <li><strong>Three-tier model routing with per-call timeouts</strong> — tier 0 (cheap) for injection screen and summaries, tier 1 (default) for planning and narration, tier 2 (strong) only for Reason-mode narration. 180s ceiling on all backends including Gemini (enforced via thread future since the google-genai SDK has no per-call timeout).</li>
+  <li><strong>Stage trace for full observability</strong> — every turn produces a <code>stage_trace</code> list with per-stage timing, tier, retry counts, grounding results, compliance results, and <code>narrate_attempts</code>. This is logged to the DB and available for dashboards without any additional instrumentation.</li>
+  <li><strong>DOC_LOOKUP fast path</strong> — metadata questions ("what tables are available?") are answered directly from <code>data_model.json</code> without SQL generation. Groundedness is skipped (no data rows to ground against). Avoids false positives on schema descriptions.</li>
+  <li><strong>Injection-based guardrail eval</strong> — rather than relying on the model to hallucinate naturally, the eval harness injects known-bad SQL and known-bad narratives at controlled pipeline stages, then asserts the guardrail fired. This is a meaningfully stronger test methodology than end-to-end accuracy alone.</li>
+</ul>
+
+<h3>What I Would Question</h3>
+<ul>
+  <li><strong>Column allowlist — resolved in v1.6.6</strong> — <code>guard_sql</code> now validates qualified column references via <code>_validate_columns()</code> (sqlglot AST walk) against an allowlist auto-built from DataFrames. <code>build_column_allowlist(data_model)</code> exposed as public API for future restricted-column annotations in <code>data_model.json</code>. The Olist dataset has no sensitive columns; in real-schema deployments, annotations in <code>data_model.json</code> are the next step.</li>
+  <li><strong>No query row or cost limits</strong> — DuckDB is in-memory on the demo, and the 7 Olist tables are small. Against a larger schema, an LLM-planned <code>SELECT * FROM large_table</code> would return millions of rows. The 50K char truncation cap in the narration stage limits what the LLM sees, but the full result is still computed. A per-query row limit (e.g., LIMIT 10,000 appended to all queries without explicit LIMIT) should be enforced at the execution layer.</li>
+  <li><strong>Compliance is log-only — resolved in v1.6.6</strong> — <code>check_compliance_deterministic()</code> replaces the tier-0 LLM compliance scan. Rules 1 (approximation language), 2 (evaluative adjectives), 4 (currency drift) are checked via regex/word-list — zero LLM cost, zero model-variability risk. Violations now gate narrative retries with rule-specific feedback fed back via <code>{compliance_feedback}</code> in <code>NARRATIVE_RETRY_PROMPT</code>. Hard-block remains groundedness-only. Rules 3 (motivational inference) and 5 (unsupported claims) are dropped — 3 has no reliable deterministic signal; 5 is covered by <code>verify_groundedness</code>.</li>
+  <li><strong>Prompt injection screening — resolved in v1.6.5</strong> — <code>screen_for_injection()</code> deployed as Stage 0 tier-0 LLM pre-classifier before <code>interpret_turn</code>. Blocks override instructions, system-prompt exfiltration, and identity manipulation. Fails open on error so guardrail failure never blocks a legitimate question. README §"Known limitations" updated.</li>
+  <li><strong>Model version pinning — partially addressed in v1.6.5</strong> — <code>MODEL_MAP</code> now has a docblock explicitly documenting that the string identifiers are intentional pins ("Never use 'latest' or unversioned aliases"), when pins were last reviewed, and the procedure for updating them. Provider-level version suffixes (e.g., <code>claude-sonnet-4-6-20250514</code>) are not used — not all providers expose stable version strings. The docblock discipline is the practical mitigation.</li>
+  <li><strong>Colab-specific tooling in eval_runner.py</strong> — <code>run_eval</code> and <code>run_guardrail_eval</code> import <code>IPython.display</code> and the Google Drive API directly. These calls are try-wrapped but not cleanly separated. Someone running the eval in a non-Colab environment gets silent fallback behavior, not a clean programmatic interface.</li>
+</ul>
+
+
+<!-- 5. Code Quality -->
+<h2 id="code">5. Code-Quality Assessment</h2>
+
+<div class="legend">
+  <span><span class="dot green"></span>Pass</span>
+  <span><span class="dot yellow"></span>Warn</span>
+  <span><span class="dot red"></span>Fail</span>
+  <span><span class="dot muted"></span>Not assessed / N/A</span>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Dimension</th><th>Status</th><th>Evidence</th><th>Note</th></tr>
+  <tr>
+    <td>Module separation</td><td class="pass">Pass</td>
+    <td><code>_agent/</code>, <code>_skills/</code>, <code>_data/</code></td>
+    <td>Clean boundary: agent logic isolated from backends, data loading, and UI. <code>streamlit_app.py</code> is orchestration only.</td>
+  </tr>
+  <tr>
+    <td>Naming</td><td class="pass">Pass</td>
+    <td><code>verify_groundedness</code>, <code>format_narrative_retry</code>, <code>_BLOCK_THRESHOLD</code></td>
+    <td>Functions, constants, and variables are intention-revealing throughout. No ambiguous abbreviations.</td>
+  </tr>
+  <tr>
+    <td>Comments / docstrings</td><td class="pass">Pass</td>
+    <td><code>guardrails.py</code>, <code>analyst_agent.py</code>, <code>duckdb_utils.py</code></td>
+    <td>Module-level docstrings explain why, not just what. Inline comments explain non-obvious choices (e.g., why year tokens are excluded from groundedness).</td>
+  </tr>
+  <tr>
+    <td>Type hints</td><td class="pass">Pass</td>
+    <td><code>verify_groundedness(narrative: str, queries: list[dict]) → dict</code></td>
+    <td>Present throughout. A few spots in <code>streamlit_app.py</code> omit them but that file is UI code.</td>
+  </tr>
+  <tr>
+    <td>Error handling</td><td class="pass">Pass</td>
+    <td><code>verify_groundedness</code> never raises; <code>call_llm</code> distinguishes fatal vs retryable errors; <code>_async_log_turn</code> never re-raises</td>
+    <td>Failure modes are categorized and handled at each layer. The pipeline degrades gracefully rather than crashing.</td>
+  </tr>
+  <tr>
+    <td>Tests</td><td class="warn">Warn</td>
+    <td><code>olist_test_cases.py</code>, <code>guardrail_test_cases.py</code></td>
+    <td>50 + 17 cases exist and are well-structured. No pytest integration. No unit tests for <code>guardrails.py</code> functions in isolation. Test execution requires Colab or manual notebook run.</td>
+  </tr>
+  <tr>
+    <td>CI/CD</td><td class="fail">Fail</td>
+    <td>No <code>.github/workflows/</code>, no <code>pytest.ini</code>, no <code>Makefile</code></td>
+    <td>No automated test execution on commit. A regression on <code>verify_groundedness</code> would not be caught until the next manual eval run.</td>
+  </tr>
+  <tr>
+    <td>Reproducibility</td><td class="warn">Warn</td>
+    <td><code>requirements.txt</code> — 8 of 10 pinned with <code>==</code> (v1.6.5)</td>
+    <td><code>google-genai</code> and <code>sqlglot</code> still at <code>&gt;=</code> (pending version confirmation from Colab env). No lockfile. Significant improvement; two packages remain unpinned.</td>
+  </tr>
+  <tr>
+    <td>Secrets handling</td><td class="pass">Pass</td>
+    <td><code>llm_backends.py:_get_key()</code>, Streamlit secrets, env vars</td>
+    <td>No keys in source. Colab Secrets → env var fallback is clean. User keys passed via <code>api_keys</code> dict, never written to process env vars.</td>
+  </tr>
+  <tr>
+    <td>Logging</td><td class="warn">Warn</td>
+    <td><code>streamlit_session_logger.py</code>, <code>_async_log_turn</code></td>
+    <td>Structured DB logging exists and is good. However, full narrative text and raw_output dict (including stage_trace with prompt fragments) are logged. In a real deployment against sensitive data, this needs a redaction layer.</td>
+  </tr>
+  <tr>
+    <td>Concurrency</td><td class="pass">Pass</td>
+    <td><code>_run_agent</code> daemon thread, stop event, <code>_results</code> dict</td>
+    <td>Streamlit threading model is handled correctly. Agent runs in a daemon thread; UI polls with rerun. Stop event allows cancellation. Thread state is scoped to session via <code>session_state</code>.</td>
+  </tr>
+  <tr>
+    <td>Configuration management</td><td class="warn">Warn</td>
+    <td><code>_MAX_NARRATE_ATTEMPTS</code>, <code>_RETRY_THRESHOLD</code>, <code>_BLOCK_THRESHOLD</code> in <code>analyst_agent.py</code></td>
+    <td>Tunable constants are documented and accessible. No config file or environment variable override — changing thresholds requires a code edit. Acceptable for a library; insufficient for a deployed service.</td>
+  </tr>
+  <tr>
+    <td>Dependency hygiene</td><td class="warn">Warn</td>
+    <td><code>requirements.txt</code></td>
+    <td>10 direct deps, reasonable. 8 of 10 pinned with <code>==</code> (v1.6.5). 2 remaining at <code>&gt;=</code>. <code>psycopg2-binary</code> is listed even when Neon DB is not configured (silent no-op). No separation of dev vs production dependencies.</td>
+  </tr>
+  <tr>
+    <td>API boundaries</td><td class="pass">Pass</td>
+    <td><code>analyst_agent()</code> return contract; <code>call_llm()</code> signature; <code>execute_queries()</code> dict protocol</td>
+    <td>Public-facing functions have clear, documented contracts. The <code>llm_fn</code> / <code>execute_fn</code> callable pattern makes the pipeline testable in isolation.</td>
+  </tr>
+  <tr>
+    <td>State management</td><td class="pass">Pass</td>
+    <td><code>st.session_state._DEFAULTS</code>, rolling summary, <code>stage_trace</code></td>
+    <td>Session state is initialized from a single <code>_DEFAULTS</code> dict. Rolling summary provides bounded conversation memory without ballooning context. No global mutable state in agent code.</td>
+  </tr>
+  <tr>
+    <td>Data access patterns</td><td class="pass">Pass</td>
+    <td><code>duckdb_utils.execute_queries()</code>, registered DataFrame views</td>
+    <td>Single shared DuckDB connection per query batch. DataFrames registered as views (read-only from SQL perspective). Connection closed in <code>finally</code> block.</td>
+  </tr>
+</table>
+</div>
+
+<h3>Specific Code Wins</h3>
+<ul>
+  <li><strong><code>prompts.py</code> — all prompts centralized</strong>: Every LLM call in the pipeline uses a named constant from one file. Changing a prompt rule requires one edit in one place, and the change is immediately visible to all callers. The naming convention (<code>NARRATIVE_RETRY_PROMPT</code>, <code>SQL_RETRY_PROMPT</code>) makes the retry architecture self-documenting.</li>
+  <li><strong><code>guardrails.py</code> — false-positive exclusion classes</strong>: Year tokens, range bounds, scale denominators, percentage tokens, and snake_case entity normalization are each handled with a specific regex and a comment explaining precisely why. This is engineering discipline, not just "it works."</li>
+  <li><strong><code>analyst_agent.py</code> — <code>_RETRY_THRESHOLD</code> / <code>_BLOCK_THRESHOLD</code> constants</strong>: Separating "when to retry" from "when to block" with explicit, documented constants is a design choice that prevents the two concerns from being conflated in production. The in-code calibration notes tell cloners exactly what to tune.</li>
+  <li><strong><code>duckdb_utils.guard_sql()</code></strong>: Uses sqlglot AST parsing, not regex. Blocks on statement type, not keyword matching. Handles the <code>sqlglot_parse_failed</code> case explicitly with a warn-and-allow path rather than a silent pass. The distinction between <code>ValueError</code> (blocked) and <code>RuntimeError</code> (parse failure) is clean.</li>
+  <li><strong><code>call_llm()</code> error categorization</strong>: Distinguishes fatal errors (413, quota exhausted — never retry), TPM rate limits (429 — short backoff, parse wait time from error message), and transient overload (529 — exponential backoff). This is correct production LLM client behavior.</li>
+  <li><strong><code>_async_log_turn()</code> never re-raises</strong>: DB logging errors are printed to Streamlit Cloud logs but never propagate to the UI. Logging failure never becomes a user-facing error. The try/except is explicit about this contract.</li>
+</ul>
+
+<h3>Specific Concerns</h3>
+<ul>
+  <li><strong><code>streamlit_app.py</code> at 1,534 lines</strong>: The file is large but mostly CSS (~400 lines) and JS (~100 lines). The actual Python orchestration logic is ~500 lines and is reasonably structured. Not a maintainability crisis, but splitting CSS/JS into a separate <code>assets/</code> file would help. The threading poll loop (lines 1155–1345) is complex — a bug here affects every user session.</li>
+  <li><strong>Stale comment in <code>prompts.py</code> — resolved in v1.6.5</strong>: The comment above <code>NARRATIVE_RETRY_PROMPT</code> referenced the old &gt;30% threshold. Fixed in commit 143d62a to reflect <code>_RETRY_THRESHOLD = 0</code> (any single unmatched number).</li>
+  <li><strong><code>eval_runner.py</code> Colab coupling</strong>: <code>IPython.display</code> and Google Drive API imports are try-wrapped but still present at module level. <code>_gdrive_link()</code> is 50 lines of Drive API traversal inside the log writer. This should be an optional plugin, not embedded in the core eval runner.</li>
+  <li><strong>No row limit in <code>execute_queries()</code></strong>: The function executes whatever SQL is planned with no row cap. The 50K char truncation in the narrate prompt is a downstream safety net, not a query-level guard. A <code>SELECT *</code> against a large table will still compute a full DataFrame before being truncated.</li>
+  <li><strong>JavaScript <code>setInterval</code> polling</strong>: <code>streamlit_app.py</code> injects two <code>setInterval</code> loops (slider fix at 400ms, autocomplete fix at 600ms) that run for the entire browser session. This is a fragile approach to Streamlit CSS/JS customization that breaks on Streamlit framework updates.</li>
+  <li><strong>No <code>.env.example</code> — resolved in v1.6.5</strong>: <code>.env.example</code> added with all required keys, Colab secret name mapping, and guidance for local vs. Colab vs. Streamlit deployment paths.</li>
+</ul>
+
+
+<!-- 6. Eval Claim -->
+<h2 id="eval">6. The Eval Claim</h2>
+
+<div class="verdict warn">
+  <strong>Claim</strong>
+  "50/50 standard eval · 17/17 guardrail injection eval" — stated in README and status line.
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Dimension</th><th>Assessment</th></tr>
+  <tr>
+    <td>Sample size</td>
+    <td>50 standard cases is below the statistical noise floor for tight pass-rate claims. A single regression looks like a 2% drop (1 case). The README acknowledges this directly and correctly. The number is a meaningful signal, not a rigorous benchmark.</td>
+  </tr>
+  <tr>
+    <td>Dataset quality</td>
+    <td>Good diversity across 6 categories: metadata (6), easy (10), hard (10), misleading (10), multi-stage (5), realistic (9). Misleading questions and multi-stage analysis are the right stress tests for an analytics agent. Most OSS evals stop at easy lookups.</td>
+  </tr>
+  <tr>
+    <td>Self-eval bias</td>
+    <td><strong>Present by default.</strong> <code>run_eval()</code> uses <code>llm_fn</code> as both answerer and assessor unless <code>assessor_llm_fn</code> is provided. The same model family grading its own answers inflates pass rates. Cross-model grading is supported via <code>assessor_llm_fn</code> but is not the default. The 50/50 headline was likely produced with self-grading.</td>
+  </tr>
+  <tr>
+    <td>Validation methodology</td>
+    <td>Dual validation (lambda + LLM) with reconciliation. The lambda is the primary signal; LLM assessment is logged for human review and can override in either direction via conservative thresholds. Lambdas must be written to match the agent's actual output format — brittle string matching (e.g. month abbreviations when the agent outputs ISO dates) produces false failures that the reconciliation cannot reliably recover from. Lambda robustness is the critical maintenance surface.</td>
+  </tr>
+  <tr>
+    <td>Variance / repeated runs</td>
+    <td>Not reported. LLM outputs are non-deterministic. The 50/50 result is from a single run. A 10× loop on a subset (easy set) is mentioned in the changelog context. Full suite variance across runs is not measured or documented.</td>
+  </tr>
+  <tr>
+    <td>Model version pinning</td>
+    <td>Not pinned. The eval results reflect the model state at time of last run. A provider update can change pass rates without any code change.</td>
+  </tr>
+  <tr>
+    <td>Guardrail injection eval</td>
+    <td>17 cases designed to test specific failure modes via injection rather than relying on natural hallucination. SQL injection (5), narrative injection (9), prompt injection (3). False-positive checks included (GQ11, GQ13, GQ14, GQ17). This methodology is stronger than end-to-end accuracy alone — it tests the guardrail components directly and in isolation.</td>
+  </tr>
+  <tr>
+    <td>What the headline means</td>
+    <td>"50/50" means: on one run, with self-grading, against 50 questions from a known dataset, the agent produced answers that satisfied both a deterministic lambda and an LLM assessor. It does not mean: reliably correct on unseen business questions across model updates. The README is accurate about this. The headline reads stronger than the evidence in isolation; the documentation corrects for it.</td>
+  </tr>
+</table>
+</div>
+
+
+<!-- 7. Production Readiness -->
+<h2 id="prod">7. Production-Readiness Scorecard</h2>
+<p style="color:var(--muted);font-size:0.85rem;">Evaluated relative to "supervised internal analytics tool" as the most likely near-term production target.</p>
+
+<div class="legend">
+  <span><span class="dot green"></span>Pass</span>
+  <span><span class="dot yellow"></span>Warn</span>
+  <span><span class="dot red"></span>Fail</span>
+  <span><span class="dot muted"></span>Not applicable / Not assessed</span>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Capability</th><th>Status</th><th>Evidence</th><th>Risk</th><th>Recommended Fix</th></tr>
+  <tr>
+    <td>Authentication</td><td class="fail">Fail</td>
+    <td>None in current codebase. Demo is public.</td>
+    <td>Anyone with the URL can use the demo and trigger API calls against the owner key.</td>
+    <td>Add Streamlit Cloud password protection or OAuth (e.g., Google Sign-In via <code>streamlit-authenticator</code>).</td>
+  </tr>
+  <tr>
+    <td>Authorization</td><td class="fail">Fail</td>
+    <td>No roles, no row-level security</td>
+    <td>All users see the same dataset. In a multi-tenant deployment, cross-tenant data leakage is possible.</td>
+    <td>Add schema-level tenant isolation before any multi-user deployment.</td>
+  </tr>
+  <tr>
+    <td>Rate limiting</td><td class="fail">Fail</td>
+    <td>None. Acknowledged in README.</td>
+    <td>Unlimited Reason-mode queries (Opus-class, ~$0.015/1K output tokens) can be triggered by any visitor.</td>
+    <td>Per-session token budget + daily spend cap + Reason-mode gating behind auth.</td>
+  </tr>
+  <tr>
+    <td>Cost guards</td><td class="fail">Fail</td>
+    <td>No billing alerts, no per-session budget</td>
+    <td>A single malicious session can run hundreds of Reason-mode turns against the owner API key.</td>
+    <td>Implement max tokens/session in <code>call_llm</code> wrapper; add provider billing alerts.</td>
+  </tr>
+  <tr>
+    <td>Input abuse protection</td><td class="pass">Pass</td>
+    <td><code>screen_for_injection()</code> deployed as Stage 0 (v1.6.5). Tier-0 LLM pre-classifier, fails open on error.</td>
+    <td>Sophisticated adversarial prompts outside the classifier's training distribution may still pass. Input length is uncapped.</td>
+    <td>Add input length cap; extend injection test cases as attack patterns evolve.</td>
+  </tr>
+  <tr>
+    <td>Prompt injection defenses</td><td class="pass">Pass</td>
+    <td>Stage 0 pre-classifier + classification gate + <code>guard_sql</code> AST check. Defense in depth.</td>
+    <td>Tier-0 model errors fail open (by design). No hard blocklist.</td>
+    <td>Acceptable defense-in-depth posture for a supervised internal tool. Public service would benefit from additional rate limiting per IP.</td>
+  </tr>
+  <tr>
+    <td>Observability</td><td class="pass">Pass</td>
+    <td><code>stage_trace</code>, Neon DB logging, <code>streamlit_session_logger.py</code></td>
+    <td>Good turn-level detail. Stage-level timing and guardrail results are logged.</td>
+    <td>Add aggregated dashboard queries against the Neon DB to surface retry rates, block rates, compliance violation rates.</td>
+  </tr>
+  <tr>
+    <td>Structured logging</td><td class="pass">Pass</td>
+    <td><code>log_turn</code>, <code>log_stage_traces</code>, <code>log_queries</code></td>
+    <td>Good structure. Raw narrative and full output dict logged.</td>
+    <td>Add a redaction layer before logging narratives in deployments against sensitive data.</td>
+  </tr>
+  <tr>
+    <td>Error tracking</td><td class="warn">Warn</td>
+    <td><code>print(f"[DB log error]...")</code> in <code>_async_log_turn</code></td>
+    <td>DB logging errors go to stdout. Agent errors are logged to DB. No Sentry/Rollbar integration.</td>
+    <td>Add structured error tracking (Sentry) for production deployments.</td>
+  </tr>
+  <tr>
+    <td>Dependency hygiene</td><td class="warn">Warn</td>
+    <td><code>requirements.txt</code> with minimum versions only</td>
+    <td>Uncontrolled upgrades can break behavior silently.</td>
+    <td>Pin exact versions in <code>requirements.txt</code> or add <code>requirements.lock</code>.</td>
+  </tr>
+  <tr>
+    <td>Secrets management</td><td class="pass">Pass</td>
+    <td>Env vars / Streamlit secrets; not in code. <code>.env.example</code> added in v1.6.5.</td>
+    <td>Low risk in current form.</td>
+    <td>–</td>
+  </tr>
+  <tr>
+    <td>PII handling</td><td class="warn">Warn</td>
+    <td>Olist dataset is public; IP logged over HTTP; narrative logged to DB</td>
+    <td>User IPs sent to ip-api.com over plaintext HTTP. In deployments against real data, narrative logs may contain PII from query results.</td>
+    <td>Switch to HTTPS geo-IP service; add redaction for narrative logging in sensitive deployments.</td>
+  </tr>
+  <tr>
+    <td>Monitoring / alerting</td><td class="fail">Fail</td>
+    <td>No uptime monitoring, no spend alerts, no anomaly detection</td>
+    <td>No signal if the demo goes down, costs spike, or guardrail block rate increases.</td>
+    <td>Add UptimeRobot or similar for demo; provider billing alerts; weekly metrics query against Neon DB.</td>
+  </tr>
+  <tr>
+    <td>Tests / CI</td><td class="fail">Fail</td>
+    <td>No pytest, no GitHub Actions</td>
+    <td>Regressions in <code>verify_groundedness</code>, <code>guard_sql</code>, or <code>classify_and_plan</code> parsing are caught only by the next manual eval run.</td>
+    <td>Add <code>pytest</code> with unit tests for deterministic functions; add GitHub Actions workflow.</td>
+  </tr>
+  <tr>
+    <td>Deployment reproducibility</td><td class="warn">Warn</td>
+    <td>Streamlit Cloud deploys from GitHub; no container, no lockfile</td>
+    <td>A dependency upgrade between deploys can change behavior.</td>
+    <td>Add <code>requirements.lock</code> or Dockerfile.</td>
+  </tr>
+  <tr>
+    <td>Rollback strategy</td><td class="warn">Warn</td>
+    <td>Git history exists; Streamlit Cloud supports redeployment from prior commit</td>
+    <td>No documented rollback procedure. No versioned deployment artifacts.</td>
+    <td>Document rollback steps; tag release commits.</td>
+  </tr>
+  <tr>
+    <td>Environment separation</td><td class="fail">Fail</td>
+    <td>Single environment; no dev/staging/prod separation</td>
+    <td>Changes are deployed directly to the live demo.</td>
+    <td>Add a staging deployment for testing before demo updates.</td>
+  </tr>
+  <tr>
+    <td>Documentation</td><td class="pass">Pass</td>
+    <td>README, architecture.md, validation.md</td>
+    <td>Above average for an open-source project. Known limitations section is honest.</td>
+    <td>Add <code>.env.example</code> and contributing guide for open-source use.</td>
+  </tr>
+  <tr>
+    <td>Column / table allowlist</td><td class="pass">Pass</td>
+    <td><code>_validate_columns()</code> added in v1.6.6. Auto-built from DataFrames in <code>execute_queries</code>, validated via sqlglot AST walk in <code>guard_sql</code>.</td>
+    <td>Current allowlist covers all schema columns. Restricted-column annotations (PII flags etc.) in <code>data_model.json</code> are the next step for real-data deployments.</td>
+    <td>Add restricted-column metadata to <code>data_model.json</code> before deploying against schemas with sensitive columns.</td>
+  </tr>
+</table>
+</div>
+
+
+<!-- 8. Risks -->
+<h2 id="risks">8. Trust Issues &amp; Risks</h2>
+
+<div class="risk">
+  <div class="risk-header"><span class="risk-sev high">High</span><span class="risk-title">1. No rate limiting or cost controls on public demo</span></div>
+  <dl>
+    <dt>Evidence</dt><dd>README: "Any visitor can trigger unlimited Reason-mode queries (the most expensive tier) against the owner's API key." Confirmed in <code>streamlit_app.py</code> — no per-session token budget, no daily cap, no tier-gating.</dd>
+    <dt>Impact</dt><dd>A single session running 50 Reason-mode turns can cost $10–30 against the Opus-class model. No billing protection exists.</dd>
+    <dt>Mitigation</dt><dd>Reason-mode behind auth; per-session token budget in <code>call_llm</code>; provider billing alerts.</dd>
+  </dl>
+</div>
+
+<div class="risk">
+  <div class="risk-header"><span class="risk-sev low">Low</span><span class="risk-title">2. Prompt injection — addressed in v1.6.5</span></div>
+  <dl>
+    <dt>Status</dt><dd><strong>Resolved.</strong> <code>screen_for_injection()</code> deployed as Stage 0 tier-0 LLM pre-classifier. Runs on the raw question before any prompt template fires. Fails open on model error (legit questions never blocked by a guardrail failure). Blocked turns logged with <code>classification="injection_blocked"</code>.</dd>
+    <dt>Residual risk</dt><dd>Tier-0 model errors fail open by design. Adversarial prompts outside the classifier's training distribution may pass to classify_and_plan (which is itself a defense layer). Input length is uncapped. Acceptable posture for supervised internal use; public service requires additional IP-level rate limiting.</dd>
+  </dl>
+</div>
+
+<div class="risk">
+  <div class="risk-header"><span class="risk-sev low">Low</span><span class="risk-title">3. Column allowlist — addressed in v1.6.6</span></div>
+  <dl>
+    <dt>Status</dt><dd><strong>Resolved.</strong> <code>_validate_columns()</code> added: sqlglot AST walk checking qualified column references against an allowlist auto-built from DataFrames in <code>execute_queries</code>. Always in sync with actual schema. <code>guard_sql</code> accepts optional <code>column_allowlist</code> parameter; <code>build_column_allowlist(data_model)</code> exposed as public API.</dd>
+    <dt>Residual risk</dt><dd>Current implementation allows all registered schema columns (appropriate for the public Olist dataset). For real-data deployments with PII or sensitive columns: annotate restricted columns in <code>data_model.json</code> and pass a narrowed allowlist. The infrastructure is now in place; the schema annotations are the next step.</dd>
+  </dl>
+</div>
+
+<div class="risk">
+  <div class="risk-header"><span class="risk-sev medium">Medium</span><span class="risk-title">4. Model version drift — eval results become invalid after provider updates</span></div>
+  <dl>
+    <dt>Evidence</dt><dd><code>MODEL_MAP</code> in <code>llm_backends.py</code> references model names (<code>"claude-sonnet-4-6"</code>, <code>"llama-3.3-70b-versatile"</code>) without version pinning. Provider aliases are mutable — the same name can point to different checkpoints after a provider update.</dd>
+    <dt>Impact</dt><dd>Prompt behavior, eval pass rates, threshold calibration, and classification accuracy can all change silently after a provider model update. Production systems cloning this codebase would not know when this happened.</dd>
+    <dt>Mitigation</dt><dd>Pin specific model versions where available; log the model version used in <code>stage_trace</code> per turn; re-run eval after any model update.</dd>
+  </dl>
+</div>
+
+<div class="risk">
+  <div class="risk-header"><span class="risk-sev medium">Medium</span><span class="risk-title">5. DB logging records narratives and full output — PII risk in real-data deployments</span></div>
+  <dl>
+    <dt>Evidence</dt><dd><code>_async_log_turn</code> in <code>streamlit_app.py</code> calls <code>logger.log_turn(narrative=result.get("narrative_raw", ""), raw_output={...})</code>. Full narrative text and stage_trace (which can include query result excerpts) are written to the Neon DB. Acceptable for the Olist public dataset.</dd>
+    <dt>Impact</dt><dd>In a deployment against real business data, narratives that surface revenue figures, customer counts, or operational metrics get logged to a third-party database (Neon) without redaction.</dd>
+    <dt>Mitigation</dt><dd>Add a configurable narrative redaction flag; document this gap explicitly in the README for cloners.</dd>
+  </dl>
+</div>
+
+<div class="risk">
+  <div class="risk-header"><span class="risk-sev low">Low</span><span class="risk-title">6. Compliance validation — made deterministic gate in v1.6.6</span></div>
+  <dl>
+    <dt>Status</dt><dd><strong>Resolved.</strong> <code>check_compliance_deterministic()</code> replaces tier-0 LLM compliance call. Rules 1 (approximation language), 2 (evaluative adjectives), 4 (currency drift) checked via regex/word-list — zero LLM cost, zero model variability. Compliance violations now trigger narrative retries (same as numeric unmatched). Rules 3 (motivational inference) and 5 (unsupported claims) dropped: 3 has no reliable deterministic signal; 5 is covered by <code>verify_groundedness</code>.</dd>
+    <dt>Design note</dt><dd>Compliance retries but never hard-blocks — a sentence can be rewritten; a fabricated number cannot. Violation samples carry forward into <code>NARRATIVE_RETRY_PROMPT</code> via <code>{compliance_feedback}</code> slot with rule-specific correction advice. Rule 3 (motivational inference) is an accepted false negative — the narrative prompt (tier-1 Sonnet) remains the enforcement layer.</dd>
+  </dl>
+</div>
+
+<div class="risk">
+  <div class="risk-header"><span class="risk-sev low">Low</span><span class="risk-title">7. No query row limit — large schema queries compute full DataFrames</span></div>
+  <dl>
+    <dt>Evidence</dt><dd><code>execute_queries()</code> in <code>duckdb_utils.py</code> executes SQL as-is. The 50K char narration cap truncates what the LLM sees, but the full DataFrame is computed first. On the 100k-row Olist dataset this is fast. Against larger tables, this becomes a latency and memory issue.</dd>
+    <dt>Impact</dt><dd>Slow queries for cloners with larger datasets; potential memory pressure in serverless deployments.</dd>
+    <dt>Mitigation</dt><dd>Add an optional <code>row_limit</code> parameter to <code>execute_queries</code>; append <code>LIMIT N</code> to unbounded SELECTs at the guard layer.</dd>
+  </dl>
+</div>
+
+<h3>LLM Hallucination Analysis</h3>
+
+<p>This system takes hallucination seriously as a verification problem, not just a behavior problem. The protection architecture is:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Protection</th><th>Type</th><th>Strength</th><th>Classification</th></tr>
+  <tr>
+    <td>Numeric fidelity rule in NARRATIVE_PROMPT: "Copy numbers character-by-character from the query results. Never round, paraphrase, or retype from memory."</td>
+    <td>Prompt-side</td><td class="warn">Useful</td><td>Model instruction — not enforced by code</td>
+  </tr>
+  <tr>
+    <td>Anti-fabrication truncation rule: "Answer ONLY from rows visible above the truncation marker."</td>
+    <td>Prompt-side</td><td class="warn">Useful</td><td>Model instruction — not enforced by code</td>
+  </tr>
+  <tr>
+    <td>Anti-inference rule: "NEVER infer human, customer, supplier, vendor, employee, or user intent, motivation, or strategy from behavioral data alone."</td>
+    <td>Prompt-side</td><td class="warn">Useful</td><td>Model instruction — no reliable deterministic detection; compliance check (rule 3) dropped. Narrative prompt is enforcement layer.</td>
+  </tr>
+  <tr>
+    <td><code>verify_groundedness()</code> — regex extracts numbers and entities, checks against raw query results. Retries on any unmatched number. Hard-blocks if ratio &gt; 0.20 after all retries.</td>
+    <td>Code-side</td><td class="pass">Strong</td><td>Deterministic verification layer — works even if the model ignores instructions</td>
+  </tr>
+  <tr>
+    <td><code>guard_sql()</code> — sqlglot AST prevents DDL/DML injection; system table references blocked.</td>
+    <td>Code-side</td><td class="pass">Strong</td><td>Deterministic execution guard — model cannot modify data</td>
+  </tr>
+  <tr>
+    <td><code>check_compliance_deterministic()</code> — regex/word-list: approximation language, evaluative adjectives, currency drift. Zero LLM calls. Violations gate retries (v1.6.6).</td>
+    <td>Code-side (deterministic)</td><td class="pass">Strong</td><td>Rules 1/2/4 deterministic gate. Rule 3 (motivational inference) accepted false negative — narrative prompt is enforcement layer.</td>
+  </tr>
+  <tr>
+    <td>Classification gate: <code>cant_answer / clarifications_needed</code> before SQL generation.</td>
+    <td>Code-side</td><td class="pass">Strong</td><td>Prevents answering questions outside scope or with missing data</td>
+  </tr>
+</table>
+</div>
+
+<p>The key remaining gap: <code>verify_groundedness</code> checks that numbers in the narrative appear in raw result rows. It does not check that the <em>interpretation</em> of those numbers is correct. A narrative can pass groundedness while still making an analytically wrong claim — for example, comparing two periods with different date filter logic, or presenting an average when a median would be more appropriate. This is the analytics correctness layer that sits above numeric grounding, and it is not deterministically verified.</p>
+
+<pre><code># Current: numeric tokens in narrative match raw result rows
+# Missing: semantic validation of analytical framing
+
+def verify_analytical_framing(question, queries, narrative, schema):
+    # Is the claimed metric grain consistent with the query GROUP BY?
+    # Does the narrative compare periods with consistent date filters?
+    # Does the narrative claim correlation from a single aggregation?
+    # Does the framing match the schema's intended KPI definition?
+    # --- none of these are checked today ---
+    pass
+</code></pre>
+
+<p>This is not a criticism — it is an honest characterization of what the system does and does not protect. Numeric fabrication is addressed. Analytical interpretation errors are not.</p>
+
+
+<!-- 9. Fit -->
+<h2 id="fit">9. Fit for the Stated Use Case</h2>
+<p>Use case: <em>"open source repo for a fully reliable, capable analytics agent. Demo app + prototyping workbook. Test cases ran over a real subset of a prod dataset. Code from the repo potentially will be applied in future prod systems."</em></p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Required Capability</th><th>What the Use Case Needs</th><th>What the System Delivers</th><th>Evidence</th><th>Status</th><th>Gap / Implication</th></tr>
+  <tr>
+    <td>Reference pipeline architecture</td>
+    <td>A complete, well-documented text-to-SQL agent pipeline that cloners can adapt</td>
+    <td>6-stage pipeline in <code>analyst_agent.py</code>; all prompts centralized in <code>prompts.py</code>; backends abstracted in <code>llm_backends.py</code></td>
+    <td>Architecture.md, README pipeline diagram</td>
+    <td class="pass">Pass</td>
+    <td>None. This is the strongest part of the system.</td>
+  </tr>
+  <tr>
+    <td>Deterministic hallucination controls</td>
+    <td>Guardrails that do not depend on model behavior</td>
+    <td><code>guard_sql</code> (AST), <code>verify_groundedness</code> (regex), split retry/block thresholds</td>
+    <td><code>guardrails.py</code>, <code>duckdb_utils.py</code></td>
+    <td class="pass">Pass</td>
+    <td>Analytical interpretation correctness is not deterministically verified (see §8).</td>
+  </tr>
+  <tr>
+    <td>Honest "fully reliable" claim</td>
+    <td>The reliability claim must be supported by evidence, not marketing</td>
+    <td>README "Known limitations" section explicitly lists: eval sample size, no cost controls, no prompt injection screening, HTTP geo-IP logging</td>
+    <td>README §"Known limitations"</td>
+    <td class="pass">Pass</td>
+    <td>The project is accurate about what it is. The "fully reliable" framing in the use case is aspirational; the codebase is honest about the gaps.</td>
+  </tr>
+  <tr>
+    <td>Eval suite over real data subset</td>
+    <td>Test cases that reflect production question patterns, not just synthetic lookups</td>
+    <td>50 cases including misleading questions, multi-stage analysis, realistic business questions against real Olist data</td>
+    <td><code>olist_test_cases.py</code></td>
+    <td class="pass">Pass</td>
+    <td>Sample size is small for statistical claims. Self-grading default inflates headline number.</td>
+  </tr>
+  <tr>
+    <td>Adaptable to other schemas</td>
+    <td>Schema injection via <code>data_model.json</code>; not hardcoded to Olist</td>
+    <td><code>data_model.json</code> is a structured schema file injected into all planning prompts. Swapping it for a different schema is the intended adaptation path.</td>
+    <td><code>data_model.json</code>, <code>load_schema_context()</code></td>
+    <td class="pass">Pass</td>
+    <td>Cloners need to build an equivalent <code>data_model.json</code> for their schema. No tooling to generate it.</td>
+  </tr>
+  <tr>
+    <td>Production deployment readiness</td>
+    <td>For "potentially applied in future prod systems," the code should be production-safe with known gaps documented</td>
+    <td>Core pipeline: production-quality. Operational layer: missing auth, rate limiting, cost controls, column allowlist, CI/CD, model pinning.</td>
+    <td>§7 scorecard; README §"Known limitations"</td>
+    <td class="warn">Warn</td>
+    <td>Cloners must add the operational layer. The gaps are documented but not templated. A "production deployment checklist" in the README would help.</td>
+  </tr>
+  <tr>
+    <td>Demo app</td>
+    <td>Working Streamlit app that demonstrates the agent to evaluators / interviewers</td>
+    <td>Live demo at analytics-agent-demo.streamlit.app; good UI; mode selector; SQL expander; pipeline trace display</td>
+    <td><code>streamlit_app.py</code>, live demo</td>
+    <td class="pass">Pass</td>
+    <td>None for demo purpose.</td>
+  </tr>
+  <tr>
+    <td>Prototyping workbook</td>
+    <td>Colab notebook as interactive eval / experimentation entry point</td>
+    <td>Notebook retained and documented as eval entry point; <code>run_eval</code> / <code>run_guardrail_eval</code> callable from notebook</td>
+    <td><code>notebooks/Agentic_AI_Analytics_Bot.ipynb</code></td>
+    <td class="pass">Pass</td>
+    <td>Colab coupling in <code>eval_runner.py</code> is a portability concern for non-Colab users.</td>
+  </tr>
+</table>
+</div>
+
+<h3>Deployment-Pattern Assessment for Production Clones</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>Pattern</th><th>Current State</th><th>What Needs to Be Added</th></tr>
+  <tr><td>Internal analytics tool (single tenant, supervised)</td><td class="warn">Deploy with restrictions</td><td>Auth, rate limiting, column allowlist for sensitive schemas, HTTPS geo-IP</td></tr>
+  <tr><td>Production internal service (multi-user)</td><td class="warn">Deploy with restrictions</td><td>All of the above + row-level auth, CI/CD, model version pinning, monitoring, PII redaction in logs</td></tr>
+  <tr><td>Customer-facing SaaS</td><td class="fail">Do not deploy</td><td>All of the above + multi-tenancy, SOC 2 controls, rate limiting per customer, formal incident response</td></tr>
+  <tr><td>Embedded analytics component</td><td class="warn">Deploy with restrictions</td><td>Extract <code>analyst_agent()</code> as a clean library function; remove Colab/Streamlit coupling from eval; add unit tests for deterministic components</td></tr>
+</table>
+</div>
+
+<div class="verdict blue">
+  <strong>Minimum Bar for Production Use</strong>
+  Auth + rate limiting + column allowlist + model version pinning + CI with unit tests for deterministic functions (<code>guard_sql</code>, <code>verify_groundedness</code>). Everything else is incremental hardening.
+</div>
+
+
+<!-- 10. Harden -->
+<h2 id="harden">10. What to Restrict / Harden</h2>
+
+<h3>Must-Do Before Production or Public Launch</h3>
+<ol>
+  <li><strong>Add authentication to the Streamlit app.</strong> Even minimal password protection (Streamlit secrets + <code>streamlit-authenticator</code>) blocks the unlimited API key exposure. For multi-user: OAuth.</li>
+  <li><strong>Implement per-session token budget and daily spend cap.</strong> Add a <code>max_tokens_per_session</code> counter in session state; track it across <code>call_llm</code> calls. Gate Reason mode behind auth or higher token budget tier.</li>
+  <li><strong>Add a column allowlist to <code>guard_sql</code> / <code>execute_queries</code>.</strong> Pass a <code>table_allowlist: set[str]</code> and optional <code>column_blocklist: dict[str, set[str]]</code> to the execution layer. Any SELECT that references a blocked table or column returns an error, not a result.</li>
+  <li><strong>Pin model versions in <code>MODEL_MAP</code>.</strong> Use specific provider version strings where available (e.g., <code>"claude-sonnet-4-6-20250514"</code>). Log the resolved model name in <code>stage_trace</code> per turn. Re-run eval when updating pins.</li>
+  <li><strong>Add a CI workflow with unit tests for deterministic functions.</strong> A 10-minute GitHub Actions workflow running <code>pytest</code> against <code>guard_sql</code>, <code>verify_groundedness</code>, <code>normalize_sql</code>, and <code>_parse_classify_and_plan</code> catches regressions before merge. No LLM calls required for these tests.</li>
+  <li><strong>Fix the stale comment in <code>prompts.py</code>.</strong> The NARRATIVE_RETRY_PROMPT section header says "Used when verify_groundedness flags &gt;30% of numbers." After v1.6.4, this is factually wrong. Misleads anyone adapting the system.</li>
+  <li><strong>Deploy prompt injection pre-classifier.</strong> The 3 guardrail eval cases show the model handles obvious injection. Instrument this as a runtime filter before the planning call for public-facing deployments.</li>
+</ol>
+
+<h3>Should-Do Within 30 Days</h3>
+<ol>
+  <li><strong>Pin dependency versions.</strong> Add <code>requirements.lock</code> or migrate to <code>pyproject.toml</code> with exact pins. Run <code>pip freeze</code> after a confirmed-working install and commit the result.</li>
+  <li><strong>Add <code>.env.example</code> and a "Cloning for Production" section in README.</strong> Document all required env vars, all must-do hardening steps, and a deployment checklist. This is the highest-leverage documentation improvement for the stated use case.</li>
+  <li><strong>Decouple eval_runner.py from Colab.</strong> Move <code>IPython.display</code> and Google Drive integration into a separate <code>colab_utils.py</code> module imported conditionally. <code>run_eval</code> and <code>run_guardrail_eval</code> should work cleanly in any Python environment.</li>
+  <li><strong>Add a query row limit to <code>execute_queries</code>.</strong> Configurable <code>row_limit: int = 10_000</code> parameter. Append <code>LIMIT N</code> to any SELECT without an explicit LIMIT at the guard layer.</li>
+  <li><strong>Add deterministic rule-based checks for highest-confidence compliance rules.</strong> Evaluative adjectives and currency drift can be detected with simple regex/keyword lists without a tier-0 LLM call. These should surface as user-visible caveats, not just log entries.</li>
+  <li><strong>Switch geo-IP to HTTPS.</strong> Replace the ip-api.com HTTP call with either the paid HTTPS tier or an alternative (e.g., <a href="https://ipinfo.io" target="_blank">ipinfo.io</a> which supports HTTPS on the free tier).</li>
+  <li><strong>Add provider billing alerts.</strong> Set up Anthropic / Groq / Google billing threshold alerts at $10, $50, and $100 to catch runaway usage.</li>
+</ol>
+
+<h3>Nice-to-Have Later</h3>
+<ol>
+  <li><strong>Increase eval suite to 100+ cases with cross-model grading as default.</strong> Pass <code>assessor_llm_fn</code> pointing to a different provider in the standard eval run. Document the cross-graded pass rate separately from the self-graded rate.</li>
+  <li><strong>Add a data freshness indicator to narrative output.</strong> Surface the dataset's last-updated timestamp in the Streamlit UI and in the narrative for any time-sensitive queries.</li>
+  <li><strong>Tooling to generate <code>data_model.json</code> from an existing schema.</strong> The primary friction for cloners adapting this to their own data is building the schema JSON. A CLI tool that generates a starter <code>data_model.json</code> from a DuckDB/SQLite/Postgres schema would lower that bar significantly.</li>
+  <li><strong>Streamlit Cloud staging environment.</strong> Deploy a separate staging app from a <code>develop</code> branch for testing before updating the public demo.</li>
+  <li><strong>Track eval variance.</strong> Run the 50-case suite 3× and report mean ± standard deviation in <code>validation.md</code>. Makes the headline number interpretable.</li>
+</ol>
+
+
+<!-- 11. Strengths -->
+<h2 id="strengths">11. Strengths Summary</h2>
+<ul>
+  <li><strong>The deterministic groundedness verifier is the most distinctive feature.</strong> <code>verify_groundedness()</code> is a real code-side verification layer that does not depend on the model behaving well. The false-positive exclusion classes (percentages, year tokens, range bounds, scale denominators, snake_case entities) are each individually motivated and documented. This is not seen in most text-to-SQL OSS projects.</li>
+  <li><strong>Prompt discipline is among the strongest in open-source analytics agents.</strong> The anti-fabrication, numeric-fidelity, scope-discipline, and anti-inference rules in <code>NARRATIVE_PROMPT</code> reflect a sophisticated understanding of how LLM-driven analytics agents fail. The prompt is a design artifact, not boilerplate.</li>
+  <li><strong>The SQL retry prompt is architecturally correct.</strong> Sending only schema + failing query + error (not the full planning prompt) on retry is the right tradeoff. It prevents label drift and token waste while fixing the specific failure. The same targeted-fix principle is applied correctly to narrative retries.</li>
+  <li><strong>The pipeline is testable by design.</strong> <code>llm_fn</code> and <code>execute_fn</code> are injected callables. The guardrail eval harness injects known-bad SQL and narratives at controlled stages. This makes individual pipeline components testable in isolation, which is rare in production agent code.</li>
+  <li><strong>Known limitations are documented honestly.</strong> The README explicitly lists eval sample size concerns, no cost controls, no prompt injection screening, HTTP geo-IP, and self-grading bias. This is more honest than most comparable projects and is the correct posture for a reference architecture.</li>
+  <li><strong>Three-tier model routing reduces cost without sacrificing quality where it matters.</strong> Tier-0 for summaries and compliance, tier-1 for planning and narration, tier-2 only for Reason-mode narration. The routing logic and model assignments are explicitly documented.</li>
+  <li><strong>The Streamlit app threading model is handled correctly.</strong> Daemon thread per turn, stop event for cancellation, session-scoped result dict, graceful hot-reload recovery. Most Streamlit apps that try to run agents in threads get this wrong.</li>
+</ul>
+
+
+<!-- 12. Gaps -->
+<h2 id="gaps">12. Gaps &amp; Weaknesses Summary</h2>
+<ul>
+  <li><strong>No CI/CD.</strong> The most consequential operational gap. A regression in <code>verify_groundedness</code> or <code>guard_sql</code> is not caught until the next manual eval run. For a project positioning itself as a reliability reference, having no automated test gate is a contradiction.</li>
+  <li><strong>No auth, rate limiting, or cost controls on the public demo.</strong> Three separate production blockers documented in the README but not mitigated. Anyone cloning this as their starting point inherits all three gaps without any scaffolding to add them.</li>
+  <li><strong>Column allowlist for restricted schemas — partially addressed (v1.6.6).</strong> Infrastructure in place: <code>_validate_columns()</code> validates against auto-built allowlist. Real-data deployments need restricted-column annotations in <code>data_model.json</code> — not yet templated.</li>
+  <li><strong>Eval self-grading is the default.</strong> The 50/50 headline was produced with the same model family answering and grading. Cross-model grading is supported but not the default. The reported pass rate should be treated as an upper bound.</li>
+  <li><strong>Compliance — resolved (v1.6.6).</strong> <code>check_compliance_deterministic()</code> replaces tier-0 LLM scan. Rules 1/2/4 gate retries. Rule 3 (motivational inference) accepted false negative — no reliable deterministic detection; narrative prompt is enforcement layer. Rule 5 covered by <code>verify_groundedness</code>.</li>
+  <li><strong>Analytical interpretation correctness is not verified.</strong> Numeric groundedness is checked. Whether the analytical framing is correct (right metric grain, right comparison logic, appropriate use of averages vs. distributions) is not. This is the hardest gap to close deterministically, but it is where real analytics errors live.</li>
+  <li><strong>Dependency versions are unpinned.</strong> A dependency upgrade between the eval run and a cloner's first deployment can produce different behavior. No lockfile.</li>
+  <li><strong>Colab coupling in eval_runner.py.</strong> <code>IPython.display</code> and Google Drive API calls are embedded in the core eval runner. Non-Colab users get try-wrapped silent fallbacks rather than a clean interface.</li>
+  <li><strong>Stale comment in prompts.py — resolved (v1.6.5).</strong> Fixed in commit 143d62a.</li>
+  <li><strong>No production deployment template.</strong> The README documents the gaps but provides no scaffolding for adding auth, rate limiting, or column allowlisting. A cloner is told what to add but not given a starting point.</li>
+</ul>
+
+
+<!-- 13. Punch List -->
+<h2 id="punch">13. Prioritized Punch List</h2>
+<div class="table-wrap">
+<table>
+  <tr><th>#</th><th>Fix</th><th>Why</th><th>Evidence</th><th>Effort</th><th>Priority</th></tr>
+  <tr>
+    <td>1</td>
+    <td><s>Fix stale comment above <code>NARRATIVE_RETRY_PROMPT</code> in <code>prompts.py</code></s></td>
+    <td>–</td>
+    <td>Fixed in v1.6.5 (commit 143d62a)</td>
+    <td>S</td><td class="pass">Done</td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td><s>Add <code>.env.example</code> with all required env vars</s></td>
+    <td>–</td>
+    <td>Added in v1.6.5 with Colab secret name mapping</td>
+    <td>S</td><td class="pass">Done</td>
+  </tr>
+  <tr>
+    <td>3</td>
+    <td>Add <code>pytest</code> + GitHub Actions CI for deterministic functions</td>
+    <td><code>guard_sql</code>, <code>verify_groundedness</code>, <code>normalize_sql</code>, <code>_parse_classify_and_plan</code> are all testable without LLM calls. CI catches regressions before merge.</td>
+    <td>No <code>.github/workflows/</code> exists</td>
+    <td>M</td><td class="fail">P0</td>
+  </tr>
+  <tr>
+    <td>4</td>
+    <td>Add auth to Streamlit app (Streamlit secrets or OAuth)</td>
+    <td>Blocks unlimited API key exposure on public demo</td>
+    <td><code>streamlit_app.py</code>, README §Known limitations</td>
+    <td>M</td><td class="fail">P0</td>
+  </tr>
+  <tr>
+    <td>5</td>
+    <td>Add per-session token budget + gate Reason mode</td>
+    <td>Single session can run $30+ in Reason-mode queries</td>
+    <td>README §Known limitations: "no per-session token budget"</td>
+    <td>M</td><td class="fail">P0</td>
+  </tr>
+  <tr>
+    <td>6</td>
+    <td><s>Pin model versions in <code>MODEL_MAP</code></s></td>
+    <td>–</td>
+    <td>Docblock + intent comment added in v1.6.5. Specific version suffixes not available from all providers.</td>
+    <td>S</td><td class="pass">Done</td>
+  </tr>
+  <tr>
+    <td>7</td>
+    <td><s>Add column allowlist to <code>execute_queries</code></s></td>
+    <td>–</td>
+    <td>Done in v1.6.6. Restricted-column annotations in <code>data_model.json</code> are next step.</td>
+    <td>M</td><td class="pass">Done</td>
+  </tr>
+  <tr>
+    <td>8</td>
+    <td>Add query row limit to <code>execute_queries</code></td>
+    <td>Unbounded SELECTs against large tables cause latency and memory issues</td>
+    <td><code>duckdb_utils.py</code></td>
+    <td>S</td><td class="warn">P1</td>
+  </tr>
+  <tr>
+    <td>9</td>
+    <td><s>Pin dependency versions</s></td>
+    <td>–</td>
+    <td>8 of 10 pinned in v1.6.5. <code>google-genai</code> and <code>sqlglot</code> pending Colab env confirmation.</td>
+    <td>S</td><td class="warn">Partial</td>
+  </tr>
+  <tr>
+    <td>10</td>
+    <td>Add "Cloning for Production" checklist to README</td>
+    <td>Gaps are documented; cloners need a starting point for the operational layer</td>
+    <td>README</td>
+    <td>S</td><td class="warn">P1</td>
+  </tr>
+  <tr>
+    <td>11</td>
+    <td>Decouple <code>eval_runner.py</code> from Colab/Google Drive</td>
+    <td>Move IPython/Drive imports to optional <code>colab_utils.py</code>. eval_runner should work in any environment.</td>
+    <td><code>eval_runner.py:_gdrive_link</code>, IPython imports</td>
+    <td>M</td><td class="warn">P1</td>
+  </tr>
+  <tr>
+    <td>12</td>
+    <td><s>Deploy prompt injection pre-classifier as a runtime filter</s></td>
+    <td>–</td>
+    <td>Done in v1.6.5. <code>screen_for_injection()</code> as Stage 0.</td>
+    <td>M</td><td class="pass">Done</td>
+  </tr>
+  <tr>
+    <td>13</td>
+    <td>Switch geo-IP to HTTPS service</td>
+    <td>User IPs sent over plaintext HTTP to ip-api.com free tier</td>
+    <td>README §Known limitations; <code>streamlit_session_logger.py</code></td>
+    <td>S</td><td class="warn">P1</td>
+  </tr>
+  <tr>
+    <td>14</td>
+    <td><s>Add deterministic rule-based layer for compliance rules</s></td>
+    <td>–</td>
+    <td>Done in v1.6.6. <code>check_compliance_deterministic()</code> — rules 1/2/4. Compliance now gates retries (no longer log-only).</td>
+    <td>M</td><td class="pass">Done</td>
+  </tr>
+  <tr>
+    <td>15</td>
+    <td>Run eval with <code>assessor_llm_fn</code> as default; document cross-graded pass rate</td>
+    <td>Current 50/50 headline is self-graded. Cross-graded rate is the honest number.</td>
+    <td><code>eval_runner.py:run_eval</code></td>
+    <td>S</td><td>P2</td>
+  </tr>
+</table>
+</div>
+
+
+<!-- 14. Bottom Line -->
+<h2 id="bottom">14. Bottom Line</h2>
+
+<p>The core pipeline and guardrail architecture are production-quality thinking wrapped in a portfolio-grade operational shell. The agent design — conservative classification, targeted retries, deterministic verification, injection-based eval — reflects a genuine understanding of how text-to-SQL agents fail in practice. The operational layer around it (auth, rate limiting, cost controls, CI, model pinning) is absent but not surprising for an open-source reference project at this stage.</p>
+
+<p>For the stated use case — open-source reference architecture that future production systems will be built from — the most urgent work is not adding features to the pipeline. It is adding the production scaffolding that cloners will need but won't find: CI, a deployment checklist, column allowlisting, dependency pinning, and a cross-graded eval result that stands behind the headline number. The gaps are documented; the next step is to template the solutions.</p>
+
+<div class="verdict blue">
+  <strong>Final Recommendation</strong>
+  <strong>Deploy as reference architecture and portfolio piece. Do not deploy as a public production service without adding auth, rate limiting, cost controls, column allowlisting, model version pinning, and CI.</strong> The agent core is trustworthy. The operational shell is not production-ready. Cloners who understand that distinction — and are willing to add the missing layer — will find this codebase a solid and unusually honest starting point.
+</div>
+
+<div class="verdict good">
+  <strong>Strongest production-relevant trait worth preserving</strong>
+  The split between <code>_RETRY_THRESHOLD</code> (any unmatched number triggers a retry) and <code>_BLOCK_THRESHOLD</code> (20% ratio triggers a hard block) is the right design for production analytics agents — it is cheap to retry early, expensive to fail the user. Preserve this architecture and extend it to the compliance layer when adding deterministic rule-based compliance checks.
+</div>
+
+
+<footer>
+  <p>Generated 2026-05-07 · Source: local repository <code>C:\Users\e.hasin\Code\analytics-agent</code> branch <code>feature/guardrails</code> · Reviewed against <code>code_modules/</code>, <code>streamlit_app.py</code>, <code>prompts.py</code>, <code>guardrails.py</code>, <code>duckdb_utils.py</code>, <code>llm_backends.py</code>, <code>eval_runner.py</code>, <code>guardrail_test_cases.py</code>, <code>README.md</code>, <code>docs/architecture.md</code>, <code>docs/validation.md</code>, <code>requirements.txt</code>, git log</p>
+  <p style="margin-top:8px;">Updated 2026-05-07 for v1.6.6: deterministic compliance gate, column allowlist, injection pre-classifier (v1.6.5), dependency pinning. Affected sections only; original findings preserved where not superseded.</p>
+  <p style="margin-top:8px;">Code review produced using a custom <code>code-review</code> skill. All findings cite inspected source evidence.</p>
+</footer>
+
+</div>
+</body>
+</html>

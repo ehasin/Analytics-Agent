@@ -19,7 +19,13 @@ import os
 import time
 
 # ── Model registry ───────────────────────────────────────────
-
+# Pinned model identifiers — intentional, not aliases.
+# Never use "latest" or unversioned aliases: they shift without notice
+# and break eval reproducibility (a new default model may score differently
+# on the 50-case suite). To update a model: change the string here, re-run
+# the full eval suite (50 standard + 17 guardrail), confirm pass rates hold,
+# then commit with the date in the message.
+# Last reviewed: 2026-05-07
 MODEL_MAP: dict[str, dict[int, str]] = {
     "claude": {
         0: "claude-haiku-4-5",
@@ -165,19 +171,33 @@ def call_llm(
                 r = client.chat.completions.create(
                     model=model_name, max_tokens=max_tokens,
                     messages=[{"role": "user", "content": prompt}],
+                    timeout=180,  # 3 min ceiling — matches Claude; prevents indefinite hangs
                 )
                 return r.choices[0].message.content.strip()
 
             elif backend == "gemini":
                 from google.genai import types
-                r = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        max_output_tokens=max_tokens,
-                    ),
-                )
-                return r.text.strip()
+                import concurrent.futures as _cf
+                # google-genai SDK does not expose a per-call timeout parameter,
+                # so we enforce the ceiling via a thread future. This prevents
+                # Gemini calls from hanging indefinitely (matches Claude/Groq behaviour).
+                def _gemini_call():
+                    return client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            max_output_tokens=max_tokens,
+                        ),
+                    ).text.strip()
+
+                with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
+                    _fut = _ex.submit(_gemini_call)
+                    try:
+                        return _fut.result(timeout=180)
+                    except _cf.TimeoutError:
+                        raise TimeoutError(
+                            "Gemini call exceeded 180s ceiling — treated as transient error"
+                        )
 
         except Exception as e:
             err_str = str(e)
