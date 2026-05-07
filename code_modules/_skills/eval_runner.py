@@ -568,6 +568,15 @@ def _format_guardrail_log(num, case, result, status):
             if orig:
                 lines.append(f"**Original narrative (replaced):**\n> {orig[:500]}\n\n")
 
+    # Guard blocks (queries blocked by guard_sql before retry replaced them)
+    guard_blocks_rec = next((r for r in trace if r.get("stage") == "guard_blocks"), None)
+    if guard_blocks_rec:
+        for gb in guard_blocks_rec.get("items", []):
+            lines.append(
+                f"**guard_sql blocked** [{gb.get('label', '')}]: "
+                f"`{gb.get('blocked_code', '')[:80]}` — {gb.get('error', '')}\n\n"
+            )
+
     # Retry record
     retry_rec = next((r for r in trace if r.get("stage") == "retry"), None)
     if retry_rec:

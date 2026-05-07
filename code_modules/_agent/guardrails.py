@@ -26,6 +26,35 @@ _NUM_RE = re.compile(
     r"|\b\d+(?:\.\d+)?[KMBkmb]?\b"
 )
 
+# Range patterns like "1–5 scale" or "1-5". Numbers that appear as the
+# low or high bound of a range are scale descriptions, not data claims.
+# Matched against the narrative before number extraction.
+_RANGE_RE = re.compile(r"\b(\d+)\s*[–\-]\s*(\d+)\b")
+
+# Scientific notation produced by DuckDB / pandas for large floats.
+# Expanded to full integer/decimal form before building the match haystack.
+_SCI_RE = re.compile(r"-?\d+(?:\.\d+)?[eE][+\-]?\d+")
+
+
+def _expand_sci_notation(text: str) -> str:
+    """Replace scientific-notation tokens with their full numeric form.
+
+    DuckDB / pandas render large floats as '1.349641e+07'. The narrative
+    model writes them as '13,496,410'. Without expansion the groundedness
+    checker can't match them, producing false positives on any large-value
+    query (revenue, order volumes, etc.).
+    """
+    def _replace(m: re.Match) -> str:
+        try:
+            val = float(m.group(0))
+            # Integer-valued floats (e.g. 1.0e+07 → 10000000)
+            if val == int(val):
+                return str(int(val))
+            return f"{val:.6f}".rstrip("0").rstrip(".")
+        except (ValueError, OverflowError):
+            return m.group(0)
+    return _SCI_RE.sub(_replace, text)
+
 # Bare 4-digit years to exclude from numeric groundedness checks.
 # Year tokens like "2017" appear constantly in factual narratives but are rarely
 # present as bare integers in query results (stored as timestamps or date strings).
@@ -125,13 +154,27 @@ def verify_groundedness(narrative: str, queries: list[dict]) -> dict:
         }
     """
     try:
-        # Build haystack from real data queries only
-        result_text = " ".join(
+        # Build haystack from real data queries only.
+        # Expand scientific notation first so "1.349641e+07" matches "13496410"
+        # written out in the narrative — DuckDB/pandas use sci notation for large
+        # floats; the narrative model correctly writes the full form.
+        result_text = _expand_sci_notation(" ".join(
             str(q.get("result", "") or "")
             for q in queries
             if q.get("code", "").strip() != "DOC_LOOKUP"
-        )
+        ))
         result_plain = result_text.replace(",", "")
+
+        # Build set of all normalised numbers present in results for rounding
+        # tolerance checks (see below).
+        result_nums: set[str] = {n for _, n in _extract_numbers(result_text)}
+
+        # Collect range-notation bounds from narrative so "1" and "5" in
+        # "on a 1–5 scale" are not treated as ungrounded data claims.
+        range_bounds: set[str] = set()
+        for m in _RANGE_RE.finditer(narrative):
+            range_bounds.add(m.group(1))
+            range_bounds.add(m.group(2))
 
         # ── Numbers ─────────────────────────────────────────
         num_pairs = _extract_numbers(narrative)
@@ -143,6 +186,9 @@ def verify_groundedness(narrative: str, queries: list[dict]) -> dict:
             # date strings / timestamps), causing systematic false positives.
             if raw.replace(",", "") in _YEAR_STOPSET:
                 continue
+            # Skip numbers that are bounds of a range like "1–5 scale".
+            if raw in range_bounds:
+                continue
             raw_plain = raw.replace(",", "")
             if (
                 raw in result_text
@@ -151,6 +197,20 @@ def verify_groundedness(narrative: str, queries: list[dict]) -> dict:
                 or normalised in result_plain
             ):
                 continue
+            # Rounding tolerance: the narrative may state a rounded form of a
+            # result value (e.g. "4.09" from "4.086421", or "13,496,410" from
+            # a multi-decimal float). Try matching at 0–4 decimal place rounding
+            # levels against every normalised number extracted from results.
+            try:
+                raw_val = float(raw_plain)
+                if any(
+                    abs(raw_val - float(r)) < max(0.01, abs(raw_val) * 0.001)
+                    for r in result_nums
+                    if r.lstrip("-").replace(".", "", 1).isdigit()
+                ):
+                    continue
+            except ValueError:
+                pass
             num_unmatched.append(raw)
 
         # ── Named entities ───────────────────────────────────

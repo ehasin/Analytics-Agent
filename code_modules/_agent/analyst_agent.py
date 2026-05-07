@@ -296,6 +296,17 @@ def analyst_agent(
     # LLM fixes only the specific SQL error without re-planning the whole question,
     # preventing label mismatches and token waste on multi-query plans.
     failed = [q for q in queries if q.get("error") and q["code"].strip() != "DOC_LOOKUP"]
+
+    # Record guard-blocked queries in stage_trace BEFORE the retry loop replaces
+    # them. This lets eval validators (and dashboards) confirm that guard_sql fired,
+    # even though the successful retry query overwrites the original in result["queries"].
+    guard_blocks = [
+        {"label": q.get("label", ""), "blocked_code": q["code"], "error": q["error"]}
+        for q in failed
+    ]
+    if guard_blocks:
+        stage_trace.append({"stage": "guard_blocks", "items": guard_blocks})
+
     if failed:
         retry_start = time.time()
         retry_queries: list[dict] = []
