@@ -382,7 +382,7 @@ def analyst_agent(
     # stylistic phrasing ("top 5", ordinal years, etc.). Above 30% the balance
     # tips toward genuine fabrication risk.
     grounding = verify_groundedness(narrative, queries)
-    compliance = check_compliance(narrative, llm_fn)
+    compliance = check_compliance(narrative, llm_fn, schema_context=schema)
 
     num_found = grounding.get("numbers_found", 0)
     num_unmatched = grounding.get("numbers_unmatched", 0)

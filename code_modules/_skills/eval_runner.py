@@ -248,6 +248,7 @@ def run_guardrail_eval(
     mode: int = 0,
     assessor_llm_fn=None,
     log_prefix: str = "",
+    schema_context: str = "",
 ) -> dict:
     """Injection-based evaluation for guardrail components.
 
@@ -334,7 +335,7 @@ def run_guardrail_eval(
             # test doesn't grade its own compliance — mirrors run_eval behaviour.
             from _agent.guardrails import verify_groundedness, check_compliance
             grounding  = verify_groundedness(inject_narr, result.get("queries", []))
-            compliance = check_compliance(inject_narr, compliance_fn)
+            compliance = check_compliance(inject_narr, compliance_fn, schema_context=schema_context)
             # Replace the guardrails record in stage_trace
             trace = result.get("stage_trace", [])
             for rec in reversed(trace):

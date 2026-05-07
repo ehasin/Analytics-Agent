@@ -251,7 +251,7 @@ _DEFAULT_RULES: list[str] = [
 _COMPLIANCE_PROMPT = """\
 You are a compliance checker for an analytics bot.
 
-Narrative to check:
+{schema_context_section}Narrative to check:
 {narrative}
 
 Check for violations of these rules:
@@ -266,6 +266,7 @@ def check_compliance(
     narrative: str,
     llm_fn,
     rules: list[str] | None = None,
+    schema_context: str = "",
 ) -> dict:
     """Tier-0 LLM scan of *narrative* for compliance with anti-hallucination rules.
 
@@ -294,7 +295,20 @@ def check_compliance(
         active_rules = rules if rules is not None else _DEFAULT_RULES
         rules_text = "\n".join(f"- {r}" for r in active_rules)
 
+        # Inject a brief schema excerpt so the tier-0 model knows the expected
+        # currency and units. Without this, "USD" in a narrative cannot be flagged
+        # as unit drift — the checker has no ground truth to compare against.
+        # Cap at 800 chars: enough to capture the currency/unit declarations at the
+        # top of the schema without blowing the tier-0 model's 8K context window.
+        schema_context_section = (
+            f"Data schema context "
+            f"(use this to verify currency, units, and entity names):\n"
+            f"{schema_context[:800]}\n\n"
+            if schema_context else ""
+        )
+
         prompt = _COMPLIANCE_PROMPT.format(
+            schema_context_section=schema_context_section,
             narrative=narrative,
             rules_text=rules_text,
         )
