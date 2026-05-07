@@ -168,6 +168,7 @@ SQL rules:
 - Treat Date fields as timestamps for range filtering; use >= and < (not <=)
 - Do not CAST date literals — use plain strings (e.g. column >= '2025-12-01')
 - Always use the full column expression in GROUP BY / ORDER BY / PARTITION BY, never SELECT aliases
+- Always wrap SUM/AVG aggregates in ROUND(..., 2) and COUNT aggregates in CAST(... AS BIGINT) — never return raw floating-point values that DuckDB may render as scientific notation (e.g. 1.35e+07)
 - Never use placeholder values like 'top_category_1' or 'replace_with_X'. If a query depends on results from a prior query, embed the prior query as a subquery or CTE to derive the values dynamically.
 - For "top-N performance over time" questions, present the raw values per group/period rather than computing ranks against a filtered subset. Ranks against pre-filtered data are misleading.
 - UUIDs (seller_id, order_id, customer_unique_id, etc.): use the full value verbatim from query results. Never truncate or shorten for display. Never fabricate missing characters. If only a short prefix is available in context, filter with LIKE 'prefix%'.

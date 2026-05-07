@@ -366,7 +366,6 @@ prompt_injection = [
 
 ]
 
-
 # ── Combined export ───────────────────────────────────────────
 
 all_guardrail_cases = sql_injection + narrative_injection + prompt_injection

@@ -63,27 +63,31 @@ User question
 ┌─────────────────────────────────────────────────┐
 │ 3. Execute (DuckDB) + retry on SQL error        │
 │    • AST-level guard: SELECT-only enforcement   │
+│    • Column allowlist: qualified refs validated │
+│      against auto-built per-table frozensets    │
 │    • Targeted per-query retry prompt            │
 └─────────────────────────────────────────────────┘
     │
     ▼
 ┌─────────────────────────────────────────────────┐
-│ 4. Narrate + groundedness retry loop            │
+│ 4. Narrate + groundedness + compliance loop     │
 │    (up to 3 attempts: 1 original + 2 retries)  │
 │    • attempt 1: NARRATIVE_PROMPT                │
 │      → verify_groundedness (deterministic)      │
-│      → pass → done                             │
+│      → check_compliance_deterministic           │
+│      → both pass → done                        │
 │    • attempts 2–3: NARRATIVE_RETRY_PROMPT       │
-│      feeds unmatched tokens back as feedback    │
-│      → verify_groundedness again               │
+│      feeds unmatched tokens + violation samples │
+│      → verify_groundedness + compliance again  │
 │      → pass → done; exhausted → sorry msg      │
 └─────────────────────────────────────────────────┘
     │
     ▼
 ┌─────────────────────────────────────────────────┐
-│ 5. Guardrails — compliance scan (tier-0 LLM)    │
-│    • check_compliance: 5-rule scan on final     │
-│      narrative — log-only, never gates retries  │
+│ 5. Guardrails — deterministic compliance gate   │
+│    • check_compliance_deterministic: rules 1/2/4│
+│      via regex/word-list — zero LLM calls       │
+│    • Hard-block: groundedness only (>20% ratio) │
 │    • narrate_attempts logged in stage_trace     │
 └─────────────────────────────────────────────────┘
     │
@@ -100,7 +104,7 @@ Four principles drive the design — applied consistently across prompts, classi
 1. **Epistemic honesty** — every question is classified into `can_answer` / `cant_answer` / `clarifications_needed` *before* SQL is generated. The agent declines to answer rather than invent.
 2. **Numeric fidelity** — the narration prompt forbids the model from rounding, paraphrasing, or retyping numbers from memory. All figures are copied character-by-character from query results.
 3. **Scope discipline** — query scope is calibrated to the question, not maxed out by default. Retrieve mode generates *only* the queries needed; Explore adds proportional context; Reason decomposes empirically without overclaiming causation.
-4. **Deterministic verification** — a post-narration guardrail layer extracts numbers and named entities from the narrative and checks them against query results without any LLM call. A separate tier-0 compliance scan flags approximation language, evaluative adjectives, motivational inference, and currency drift.
+4. **Deterministic verification** — a post-narration guardrail layer extracts numbers and named entities from the narrative and checks them against query results without any LLM call. A deterministic regex/word-list compliance gate (`check_compliance_deterministic`) flags approximation language, evaluative adjectives, and currency drift — zero LLM cost, zero model-variability risk.
 
 These translate into concrete guardrails in [`code_modules/_agent/prompts.py`](code_modules/_agent/prompts.py) and [`code_modules/_agent/guardrails.py`](code_modules/_agent/guardrails.py).
 
@@ -112,7 +116,9 @@ This is a portfolio/PoC project. The architecture is designed for reliability, b
 
 **No cost or abuse controls on the public demo.** Any visitor can trigger unlimited Reason-mode queries (the most expensive tier) against the owner's API key. There is no per-session token budget, no daily spend cap, and no rate limiting.
 
-**Prompt injection is not screened.** User input is concatenated directly into planning prompts. A prompt-injection pre-classifier is present in the guardrail eval test cases but not deployed as a runtime filter.
+**Geo-IP logging is HTTP.** The ip-api.com free tier does not support HTTPS; user IPs are sent over a plaintext connection for session geo-tagging. This is a known constraint of the free tier.
+
+**No cost or abuse controls on the public demo.** Any visitor can trigger unlimited Reason-mode queries (the most expensive tier) against the owner's API key. There is no per-session token budget, no daily spend cap, and no rate limiting.
 
 **Geo-IP logging is HTTP.** The ip-api.com free tier does not support HTTPS; user IPs are sent over a plaintext connection for session geo-tagging. This is a known constraint of the free tier.
 
@@ -169,7 +175,7 @@ The Streamlit app accepts an API key directly in the UI sidebar, so a local `.en
 
 ## Running the eval suite
 
-The notebook (`notebooks/Agentic_AI_Analytics_Bot.ipynb`) is the intended entry point for the eval suite — it provides Drive-mounted logging and progress display. Block 7 runs all 50 standard cases; the guardrail injection eval (`run_guardrail_eval`) runs separately against the 18 injection test cases in `_data/guardrail_test_cases.py`.
+The notebook (`notebooks/Agentic_AI_Analytics_Bot.ipynb`) is the intended entry point for the eval suite — it provides Drive-mounted logging and progress display. Block 7 runs all 50 standard cases; the guardrail injection eval (`run_guardrail_eval`) runs separately against the 17 injection test cases in `_data/guardrail_test_cases.py`.
 
 To run programmatically with cross-model grading:
 
@@ -195,12 +201,13 @@ g_results = run_guardrail_eval(agent_fn=agent, execute_fn=execute, llm_fn=llm,
 
 ## Status
 
-`v1.6.6` — compliance validation made fully deterministic and promoted to a gate. Tier-0 LLM compliance call removed. Rules 1 (approximation language), 2 (evaluative adjectives), 4 (currency drift) now checked via regex/word-list with zero LLM cost; rules 3 and 5 dropped (3 has no reliable deterministic signal; 5 is covered by `verify_groundedness`). Compliance violations trigger narrative retries; hard-block remains groundedness-only. Column allowlist built from DataFrames in `execute_queries`, validated via sqlglot AST walk in `guard_sql`. Violation samples carry forward into retry prompt via `{compliance_feedback}` slot.
+`v1.6.7` — SQL numeric format hardening and eval lambda fix. SQL planner prompt rule: SUM/AVG aggregates wrapped in `ROUND(..., 2)`, COUNT in `CAST(... AS BIGINT)` — prevents DuckDB scientific notation (`1.35e+07`) from tripping the groundedness checker. Q38 eval lambda fixed to accept ISO date format (`2017-01`) alongside month-name abbreviations.
 
 ## Changelog
 
 | Version | Summary |
 |---|---|
+| `v1.6.7` | SQL numeric format hardening: `CLASSIFY_AND_PLAN_PROMPT` SQL rules block now requires SUM/AVG to be wrapped in `ROUND(..., 2)` and COUNT in `CAST(... AS BIGINT)`, eliminating DuckDB scientific notation output (e.g. `1.349641e+07`) that caused the groundedness checker to parse exponent digits as unmatched numbers and hard-block the narrative. Eval lambda fix: Q38 multi-stage validator updated to accept ISO date format (`2017-01` through `2017-12`) alongside month-name abbreviations — the agent consistently outputs date-format monthly breakdown tables, the old lambda matched only on `jan`/`feb` short names and silently failed valid answers. |
 | `v1.6.6` | Compliance validation made deterministic and gating. `check_compliance_deterministic()` replaces tier-0 LLM `check_compliance()` for rules 1/2/4 — pure regex/word-list, zero LLM calls per turn. Rules 3 (motivational inference) and 5 (unsupported claims) dropped: 3 has no reliable deterministic detection and the narrative prompt is the enforcement layer; 5 is already covered by `verify_groundedness`. Compliance violations now fire retries (same as numeric unmatched); hard-block is groundedness-only — a sentence can be rewritten, a fabricated number cannot. Violation samples carry forward into `NARRATIVE_RETRY_PROMPT` via new `{compliance_feedback}` slot with rule-specific correction advice. Column allowlist: `build_column_allowlist(data_model)` builds `{table: frozenset(cols)}` from schema JSON; `_validate_columns()` walks the sqlglot AST for qualified column references; `guard_sql()` accepts optional `column_allowlist`; `execute_queries` auto-builds allowlist from DataFrames — zero API changes to callers. GQ10 updated: rule 3 documented as accepted false negative. |
 | `v1.6.5` | Prompt injection pre-classifier deployed as Stage 0 (`screen_for_injection` in `conversation_processor.py`). Runs on the raw question via `INJECTION_CLASSIFIER_PROMPT` (tier-0 LLM) before `interpret_turn` or any other prompt template processes the input. Blocks override instructions, system-prompt exfiltration, and identity manipulation; fails open on model error so a guardrail failure never blocks a legitimate question. Blocked turns are logged with `classification="injection_blocked"`. `requirements.txt` pinned to verified versions. MODEL_MAP documented as intentional pins. `.env.example` updated with Colab secret name mapping. |
 | `v1.6.4` | Split retry/block thresholds in the groundedness loop. `_RETRY_THRESHOLD = 0` (absolute count) fires a retry on any single unmatched number — the retry prompt delivers exact feedback so derived subtractions and computed sums get a correction pass rather than silently reaching the user. `_BLOCK_THRESHOLD = 0.20` (ratio) hard-blocks only when the final attempt still has >20% unmatched — tighter than the legacy 30%, and decoupled from the retry trigger so low-ratio persistent cases pass rather than error. Both constants are documented and tunable. Entity matching extended: snake_case result values now match title-cased narrative entities (e.g. `credit_card` → "Credit Card"). |
