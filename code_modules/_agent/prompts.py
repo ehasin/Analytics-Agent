@@ -170,6 +170,8 @@ SQL rules:
 - Always use the full column expression in GROUP BY / ORDER BY / PARTITION BY, never SELECT aliases
 - Never use placeholder values like 'top_category_1' or 'replace_with_X'. If a query depends on results from a prior query, embed the prior query as a subquery or CTE to derive the values dynamically.
 - For "top-N performance over time" questions, present the raw values per group/period rather than computing ranks against a filtered subset. Ranks against pre-filtered data are misleading.
+- UUIDs (seller_id, order_id, customer_unique_id, etc.): use the full value verbatim from query results. Never truncate or shorten for display. Never fabricate missing characters. If only a short prefix is available in context, filter with LIKE 'prefix%'.
+- Column aliases: underscores only, no spaces.
 
 Column discipline:
 - SELECT only the columns needed to answer the question. Never SELECT *.
@@ -346,6 +348,7 @@ Update the summary to reflect what has now been covered. Capture:
 - Findings established (with key numbers where relevant)
 - Open threads or hypotheses not yet resolved
 - Current analytical depth (e.g. "3 turns investigating a [some metric] spike in a [specific period]")
+- Preserve any UUID-format IDs verbatim — do not shorten or truncate
 
 Do NOT anticipate future questions. Do NOT include meta-commentary.
 Keep the summary concise — target 200 words or fewer, hard max 500 words.

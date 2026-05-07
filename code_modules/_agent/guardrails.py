@@ -70,9 +70,18 @@ _TITLE_SEQ_RE = re.compile(r"\b([A-Z][a-zA-Zà-öø-ÿ]+(?:\s+[A-Z][a-zA-Zà-ö�
 _CAPS_CODE_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,4})\b")
 
 _ENTITY_STOPLIST = {
+    # Articles / prepositions / conjunctions
     "The", "In", "For", "By", "With", "And", "Or", "Not", "A", "An",
     "Of", "To", "Is", "Are", "Was", "Were", "No", "Yes",
+    # Generic analytical / aggregation terms
     "Total", "Average", "Count", "Top", "All", "Per",
+    "Rank", "Rate", "Score", "Value", "Net", "Gross",
+    # Column-header words that appear in narrative prose but not in result rows
+    "Order", "Seller", "Customer", "Revenue", "Frequency",
+    "Metric", "Label", "Period", "Segment", "Tier",
+    "Week", "Month", "Pivot", "Sales", "Growth", "Profit",
+    # Brand / product names not present in raw query output
+    "Olist",
 }
 
 
@@ -84,7 +93,13 @@ def _extract_entities(text: str) -> list[str]:
     for pattern in (_TITLE_SEQ_RE, _CAPS_CODE_RE):
         for m in pattern.finditer(text):
             word = m.group(1)
-            if word not in _ENTITY_STOPLIST and word not in seen:
+            # Skip if ANY token in the matched sequence is a stoplist word.
+            # This catches column-header phrases like "Customer Count" or
+            # "Net Revenue" where the full string isn't in the stoplist but
+            # an individual word is.
+            if any(w in _ENTITY_STOPLIST for w in word.split()):
+                continue
+            if word not in seen:
                 seen.add(word)
                 entities.append(word)
 
