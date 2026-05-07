@@ -331,11 +331,12 @@ def run_guardrail_eval(
         if inject_narr is not None:
             result["narrative"] = inject_narr
             # Re-run guardrails on the injected narrative so results reflect it.
-            # Use compliance_fn (assessor_llm_fn if provided) so the model under
-            # test doesn't grade its own compliance — mirrors run_eval behaviour.
-            from _agent.guardrails import verify_groundedness, check_compliance
+            # Use check_compliance_deterministic (no LLM call) — consistent with
+            # the pipeline and eliminates assessor self-grading bias entirely.
+            # compliance_fn / assessor_llm_fn no longer used for this path.
+            from _agent.guardrails import verify_groundedness, check_compliance_deterministic
             grounding  = verify_groundedness(inject_narr, result.get("queries", []))
-            compliance = check_compliance(inject_narr, compliance_fn, schema_context=schema_context)
+            compliance = check_compliance_deterministic(inject_narr, schema_context=schema_context)
             # Replace the guardrails record in stage_trace
             trace = result.get("stage_trace", [])
             for rec in reversed(trace):
