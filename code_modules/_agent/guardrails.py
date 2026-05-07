@@ -31,6 +31,12 @@ _NUM_RE = re.compile(
 # Matched against the narrative before number extraction.
 _RANGE_RE = re.compile(r"\b(\d+)\s*[–\-]\s*(\d+)\b")
 
+# "Out of N" / "X/N" scale denominators — e.g. "4.09 out of 5" or "rated 4/5".
+# The denominator is a known scale maximum from the schema, not a queried value.
+# Without this, "5" in "average score of 4.09 out of 5" is flagged as ungrounded,
+# causing a false positive hard-block on straightforward review-score questions.
+_OUT_OF_RE = re.compile(r"\bout\s+of\s+(\d+)\b|(?<=\d)/(\d+)\b")
+
 # Scientific notation produced by DuckDB / pandas for large floats.
 # Expanded to full integer/decimal form before building the match haystack.
 _SCI_RE = re.compile(r"-?\d+(?:\.\d+)?[eE][+\-]?\d+")
@@ -185,10 +191,17 @@ def verify_groundedness(narrative: str, queries: list[dict]) -> dict:
 
         # Collect range-notation bounds from narrative so "1" and "5" in
         # "on a 1–5 scale" are not treated as ungrounded data claims.
+        # Also collect "out of N" denominators ("4.09 out of 5", "rated 4/5")
+        # for the same reason — scale maximums are schema knowledge, not data.
         range_bounds: set[str] = set()
         for m in _RANGE_RE.finditer(narrative):
             range_bounds.add(m.group(1))
             range_bounds.add(m.group(2))
+        for m in _OUT_OF_RE.finditer(narrative):
+            # Regex has two capture groups (alt branches); only one fires per match.
+            val = m.group(1) or m.group(2)
+            if val:
+                range_bounds.add(val)
 
         # ── Numbers ─────────────────────────────────────────
         num_pairs = _extract_numbers(narrative)
