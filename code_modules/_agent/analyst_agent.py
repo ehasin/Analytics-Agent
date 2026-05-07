@@ -31,7 +31,7 @@ from .prompts import (
     NARRATIVE_FMT_RETRIEVE, NARRATIVE_FMT_EXPLORE, NARRATIVE_FMT_REASON,
     CONTEXT_NOTE_PLAN, CONTEXT_NOTE_NARRATE, SQL_RETRY_PROMPT,
 )
-from .guardrails import verify_groundedness, check_compliance
+from .guardrails import verify_groundedness, check_compliance_deterministic
 
 
 # ── Mode names ───────────────────────────────────────────────
@@ -249,6 +249,7 @@ def format_narrative_retry(
     llm_fn,
     unmatched_samples: list[str],
     attempt: int,
+    compliance_issues: "list[str] | None" = None,
     user_context: str | None = None,
 ) -> tuple[str, dict]:
     """Re-generate a narrative after a groundedness failure.
@@ -281,8 +282,39 @@ def format_narrative_retry(
     unmatched_list = (
         ", ".join(repr(s) for s in unmatched_samples)
         if unmatched_samples
-        else "unknown — rewrite using only values present in result rows"
+        else "none"
     )
+
+    # Build compliance feedback block for the retry prompt.
+    # Each item in compliance_issues is a human-readable violation string from
+    # check_compliance_deterministic (e.g. "Rule 1 — approximation language: roughly").
+    if compliance_issues:
+        rules_advice: list[str] = []
+        for issue in compliance_issues:
+            if "Rule 1" in issue:
+                rules_advice.append(
+                    "  → Do not use approximately / roughly / around / about / ~ "
+                    "before numbers. State figures exactly as they appear in results."
+                )
+            elif "Rule 2" in issue:
+                rules_advice.append(
+                    "  → Do not use evaluative adjectives "
+                    "(impressive, exceptional, alarming, concerning, excellent, "
+                    "disappointing, troubling, encouraging, stellar, dismal, etc.)."
+                )
+            elif "Rule 4" in issue:
+                rules_advice.append(
+                    "  → Use BRL or R$ only. Do not write USD or bare $."
+                )
+        compliance_feedback = (
+            "\nCOMPLIANCE VIOLATIONS (also fix in this rewrite):\n"
+            + "\n".join(f"  {v}" for v in compliance_issues)
+            + "\n"
+            + "\n".join(rules_advice)
+            + "\n"
+        )
+    else:
+        compliance_feedback = ""
 
     prompt = NARRATIVE_RETRY_PROMPT.format(
         question=question,
@@ -291,6 +323,7 @@ def format_narrative_retry(
         results_text=results_text,
         attempt=attempt,
         unmatched_list=unmatched_list,
+        compliance_feedback=compliance_feedback,
         fmt=fmt,
     )
 
@@ -461,7 +494,9 @@ def analyst_agent(
     # See _RETRY_THRESHOLD / _BLOCK_THRESHOLD constants for calibration rationale.
 
     grounding: dict = {}
+    det_compliance: dict = {}
     guardrail_issues: list[str] = []
+    compliance_issues: list[str] = []  # carries violation samples into next retry
     grounding_ratio: float = 0.0
     narrative = ""
 
@@ -477,6 +512,7 @@ def analyst_agent(
                 narrative, narr_record = format_narrative_retry(
                     question, queries, mode, schema, llm_fn,
                     unmatched_samples=grounding.get("unmatched_samples", []),
+                    compliance_issues=compliance_issues,
                     attempt=narrate_attempt,
                     user_context=user_context,
                 )
@@ -491,31 +527,39 @@ def analyst_agent(
         num_unmatched = grounding.get("numbers_unmatched", 0)
         grounding_ratio = num_unmatched / num_found if num_found > 0 else 0.0
 
+        # Deterministic compliance check (rules 1, 2, 4 — no LLM call)
+        det_compliance = check_compliance_deterministic(narrative, schema_context=schema)
+        det_violations = det_compliance.get("violations", 0)
+        compliance_issues = det_compliance.get("samples", []) if det_violations > 0 else []
+
         guardrail_issues = []
         if num_unmatched > _RETRY_THRESHOLD:
             guardrail_issues.append("numeric_validation_failed")
+        if det_violations > 0:
+            guardrail_issues.append("compliance_failed")
 
         if not guardrail_issues:
             break  # Narrative passed cleanly — exit loop
 
-        # Log the per-attempt grounding failure so analysts can trace the retry.
+        # Log the per-attempt failure for analyst inspection of retry progression
         stage_trace[-1]["grounding_failed"] = True
         stage_trace[-1]["grounding_ratio"] = round(grounding_ratio, 3)
         stage_trace[-1]["unmatched_samples"] = grounding.get("unmatched_samples", [])
+        if det_violations > 0:
+            stage_trace[-1]["compliance_violations"] = det_violations
+            stage_trace[-1]["compliance_samples"] = compliance_issues
 
-    # Compliance runs once on the final narrative — log-only regardless of outcome.
-    compliance = check_compliance(narrative, llm_fn, schema_context=schema)
-
-    # Hard-block only when the ratio after all retries still exceeds _BLOCK_THRESHOLD.
-    # guardrail_issues being set just means the last attempt had unmatched numbers
-    # (any count > 0). The block gate is stricter: if retries reduced the ratio
-    # below 0.20, the narrative passes — low persistent unmatched counts are
-    # rounding noise that the retry loop couldn't fully eliminate.
-    should_block = bool(guardrail_issues) and grounding_ratio > _BLOCK_THRESHOLD
+    # Hard-block: groundedness only. Compliance retries but never hard-blocks —
+    # a persistent low-ratio compliance case (e.g. one "roughly" the model cannot
+    # avoid for a genuinely derived value) is less dangerous than numeric fabrication.
+    # _BLOCK_THRESHOLD guards against that: 1 violation in a 100-token narrative is
+    # a rounding artefact, not a fabrication signal.
+    should_block = (
+        "numeric_validation_failed" in guardrail_issues
+        and grounding_ratio > _BLOCK_THRESHOLD
+    )
 
     if should_block:
-        # Replace narrative with a user-facing message; preserve the last failing
-        # narrative in stage_trace for analyst inspection.
         original_narrative = narrative
         narrative = (
             f"Sorry, I wasn't able to generate a verified answer for this question "
@@ -527,7 +571,7 @@ def analyst_agent(
     stage_trace.append({
         "stage":              "guardrails",
         "grounding":          grounding,
-        "compliance":         compliance,
+        "compliance":         det_compliance,   # deterministic result (was tier-0 LLM)
         "guardrail_issues":   guardrail_issues,
         "narrative_replaced": should_block,
         "narrate_attempts":   narrate_attempt,

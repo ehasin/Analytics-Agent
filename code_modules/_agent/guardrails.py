@@ -52,6 +52,35 @@ _PCT_RE = re.compile(
 # Expanded to full integer/decimal form before building the match haystack.
 _SCI_RE = re.compile(r"-?\d+(?:\.\d+)?[eE][+\-]?\d+")
 
+# ── Deterministic compliance check constants ─────────────────
+# Rules 1, 2, and 4 are checked here without any LLM call.
+# Rule 3 (motivational inference) is dropped — no deterministic check is
+# reliable enough; the narrative prompt enforces it at the model level.
+# Rule 5 (unsupported claims) is dropped — covered by verify_groundedness.
+
+# Rule 1: Approximation language directly before a number.
+# Catches "approximately R$1.2M", "roughly 44,000", "~50K".
+# Known limitation: "around 2017" (temporal) is a theoretical false positive,
+# negligible in practice for this dataset where time refs use "in 2017" form.
+_APPROX_BEFORE_NUM_RE = re.compile(
+    r"\b(approximately|around|roughly|about)\s+[R$]?\d",
+    re.IGNORECASE,
+)
+_TILDE_NUM_RE = re.compile(r"~\s*[R$]?\d")
+
+# Rule 2: Evaluative adjectives — intentionally tight to avoid false positives.
+_EVAL_WORDS: frozenset[str] = frozenset({
+    "impressive", "concerning", "worrying", "alarming",
+    "excellent", "exceptional", "disappointing", "troubling",
+    "encouraging", "stellar", "dismal",
+})
+
+# Rule 4: Currency drift. Bare $ (not R$) or USD when schema specifies BRL.
+_USD_RE = re.compile(r"\bUSD\b")
+# $ not preceded by a letter (excludes R$, C$, etc.)
+_BARE_DOLLAR_RE = re.compile(r"(?<![A-Za-z])\$\s*\d")
+_BRL_IN_SCHEMA_RE = re.compile(r"\bBRL\b", re.IGNORECASE)
+
 
 def _expand_sci_notation(text: str) -> str:
     """Replace scientific-notation tokens with their full numeric form.
@@ -152,6 +181,69 @@ def _extract_entities(text: str) -> list[str]:
                 entities.append(word)
 
     return entities
+
+
+def check_compliance_deterministic(
+    narrative: str,
+    schema_context: str = "",
+) -> dict:
+    """Deterministic compliance check for rules 1, 2, and 4. No LLM call.
+
+    Replaces the tier-0 LLM scan for these three rules. Runs inside the
+    narrate → groundedness → retry loop so violations trigger a corrective
+    rewrite, same as numeric groundedness failures.
+
+    Rules checked:
+      1. Approximation language (approximately / roughly / around / ~) before a number.
+      2. Evaluative adjectives — closed list (impressive, exceptional, alarming, etc.).
+      4. Currency drift — narrative uses USD or bare $ when schema specifies BRL.
+
+    Rules NOT checked here:
+      3. Motivational inference — dropped; narrative prompt enforces it.
+      5. Unsupported claims — covered by verify_groundedness.
+
+    Returns:
+        {"violations": int, "details": str, "samples": list[str]}
+        violations == 0 means clean.
+        samples contains the human-readable violation strings for retry feedback.
+    """
+    violations: list[str] = []
+
+    # ── Rule 1: Approximation language ──────────────────────
+    approx_words = _APPROX_BEFORE_NUM_RE.findall(narrative)
+    tilde_hit = bool(_TILDE_NUM_RE.search(narrative))
+    all_approx = list({w.lower() for w in approx_words})
+    if tilde_hit:
+        all_approx.append("~")
+    if all_approx:
+        violations.append(
+            f"Rule 1 — approximation language before number: {', '.join(all_approx[:3])}"
+        )
+
+    # ── Rule 2: Evaluative adjectives ───────────────────────
+    narrative_lower = narrative.lower()
+    found_eval = sorted(
+        w for w in _EVAL_WORDS
+        if re.search(rf"\b{re.escape(w)}\b", narrative_lower)
+    )
+    if found_eval:
+        violations.append(
+            f"Rule 2 — evaluative adjectives: {', '.join(found_eval[:3])}"
+        )
+
+    # ── Rule 4: Currency drift ───────────────────────────────
+    # Only flag when schema explicitly specifies BRL and narrative contradicts it.
+    if schema_context and _BRL_IN_SCHEMA_RE.search(schema_context):
+        if _USD_RE.search(narrative) or _BARE_DOLLAR_RE.search(narrative):
+            violations.append(
+                "Rule 4 — currency drift: narrative uses USD/$ but schema specifies BRL"
+            )
+
+    return {
+        "violations": len(violations),
+        "details": " | ".join(violations) if violations else "none",
+        "samples": violations,
+    }
 
 
 # ── Groundedness verifier ────────────────────────────────────
@@ -293,13 +385,17 @@ def verify_groundedness(narrative: str, queries: list[dict]) -> dict:
 
 # ── Compliance checker ───────────────────────────────────────
 
+# Rules 1, 2, and 4 are now checked deterministically by check_compliance_deterministic().
+# check_compliance() is no longer called in the main agent pipeline (v1.6.6+).
+# It is retained for testing and custom deployment use. The rules below cover
+# the remaining cases that require LLM judgment if re-enabled.
 _DEFAULT_RULES: list[str] = [
-    "Contains numbers described as approximate when exact values were available "
-    "(e.g. 'approximately', 'around', 'roughly' preceding a number)",
-    "Uses evaluative adjectives that characterise results as good or bad "
-    "(e.g. impressive, concerning, worrying, excellent, alarming)",
-    "Infers human intent or motivation from behavioural data alone",
-    "States a currency or unit that contradicts what the data schema specifies",
+    # Rule 3 — motivational inference: too semantic for reliable deterministic detection.
+    # The narrative prompt forbids it; no runtime gate is deployed.
+    "Infers human intent or motivation from behavioural data alone "
+    "(e.g. 'customers are unhappy because...', 'users clearly prefer...')",
+    # Rule 5 — unsupported claims: largely covered by verify_groundedness.
+    # Retained for categorical edge cases not caught by number/entity regex.
     "Makes a numerical or categorical claim that does not appear in the query results",
 ]
 
@@ -324,6 +420,10 @@ def check_compliance(
     schema_context: str = "",
 ) -> dict:
     """Tier-0 LLM scan of *narrative* for compliance with anti-hallucination rules.
+
+    NOTE: Not called in the main agent pipeline as of v1.6.6. Rules 1/2/4 are now
+    checked deterministically by check_compliance_deterministic(). Rules 3/5 remain
+    here for testing and custom use. Re-enable by calling from analyst_agent.py.
 
     Uses llm_fn(prompt, tier=0) — the cheapest available model — to keep
     guardrail overhead low. Never raises; returns a safe default on any error.

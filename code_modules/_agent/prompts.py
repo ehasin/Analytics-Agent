@@ -339,7 +339,7 @@ Answer:"""
 # context from the failed attempt; the goal is a tight corrective rewrite.
 
 NARRATIVE_RETRY_PROMPT = """\
-You are rewriting an analytics narrative that failed a numeric groundedness check.
+You are rewriting an analytics narrative that failed validation.
 
 User question: {question}
 
@@ -349,15 +349,15 @@ DATA MODEL (for column/table context):
 Query results:
 {results_text}
 
-Your previous attempt (attempt {attempt}) was rejected because these values appeared \
-in the narrative but were not found verbatim in the query results above:
+Your previous attempt (attempt {attempt}) contained the following issues:
+
+NUMERIC GROUNDEDNESS — values not found verbatim in query results:
   {unmatched_list}
-
-These are most likely derived values you computed (percentages, grand totals, \
+  These are most likely derived values you computed (percentages, grand totals, \
 differences, running averages). Do NOT include any value that does not appear \
-verbatim in a result row above. If the question seems to call for a percentage or \
-total that is not in the results, omit it — do not compute it in prose.
-
+verbatim in a result row above. If the question calls for a percentage or total \
+not in the results, omit it — do not compute it in prose.
+{compliance_feedback}
 {fmt}
 
 General rules:
