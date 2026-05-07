@@ -354,49 +354,53 @@ def analyst_agent(
     except Exception as e:
         narrative = f"(Narrative failed: {e})"
 
-    # Stage 4: Guardrails — verify groundedness and compliance; append caveat
-    # to the narrative when issues are detected (soft-block). The response is
-    # never suppressed entirely — the caveat informs the user and preserves
-    # the data while flagging the specific concern.
+    # Stage 4: Guardrails — deterministic groundedness check + tier-0 compliance scan.
+    #
+    # UX CONTRACT:
+    #   - A clean result → narrative is returned unchanged. No notice, no caveat.
+    #   - Deterministic groundedness failure → narrative is REPLACED with a brief
+    #     "cannot answer" message containing only an issue code-name. No details
+    #     are exposed to the user — full grounding and compliance data go to
+    #     stage_trace and the DB log only.
+    #   - Compliance check (LLM-based, tier-0) → log only, NEVER surfaced to the
+    #     user. Tier-0 models are too unreliable for user-facing violation text;
+    #     the check exists for offline analysis and eval harness use only.
+    #
+    # 0.3 threshold: flag when >30% of extracted numbers are unmatched against
+    # query results. At lower rates unmatched tokens are typically noise from
+    # stylistic phrasing ("top 5", ordinal years, etc.). Above 30% the balance
+    # tips toward genuine fabrication risk.
     grounding = verify_groundedness(narrative, queries)
     compliance = check_compliance(narrative, llm_fn)
 
     num_found = grounding.get("numbers_found", 0)
     num_unmatched = grounding.get("numbers_unmatched", 0)
     grounding_ratio = num_unmatched / num_found if num_found > 0 else 0.0
-    compliance_violations = compliance.get("violations", 0)
 
-    caveat_lines: list[str] = []
-    # 0.3 threshold: flag when more than 30% of extracted numbers are unmatched.
-    # At lower rates (1-2 unmatched out of many) unmatched tokens are typically
-    # noise from stylistic phrasing (e.g. "top 5 sellers"). At >30% the balance
-    # tips toward genuine fabrication risk. Tune this value if false-positive
-    # caveats appear too frequently on clean narratives in practice.
+    guardrail_issues: list[str] = []
     if grounding_ratio > 0.3:
-        samples = grounding.get("unmatched_samples", [])
-        sample_str = ", ".join(samples[:3]) if samples else ""
-        caveat_lines.append(
-            f"⚠ **Groundedness notice:** {num_unmatched} of {num_found} "
-            f"figure(s) in this response could not be verified against query "
-            f"results{(' (' + sample_str + ')') if sample_str else ''}. "
-            f"Please cross-check key numbers directly."
-        )
-    if compliance_violations > 0:
-        details = compliance.get("details", "")
-        caveat_lines.append(
-            f"⚠ **Compliance notice:** {compliance_violations} potential "
-            f"issue(s) detected in this response"
-            f"{(': ' + details) if details and details != 'none' else ''}."
-        )
+        guardrail_issues.append("numeric_validation_failed")
 
-    if caveat_lines:
-        narrative = narrative.rstrip() + "\n\n" + "\n\n".join(caveat_lines)
+    if guardrail_issues:
+        # Replace narrative entirely — do not leak grounding details to the user.
+        # The original narrative and full guardrail data are preserved in stage_trace.
+        original_narrative = narrative
+        narrative = (
+            "Unfortunately, I cannot provide a reliable answer at this stage. "
+            f"({', '.join(guardrail_issues)})"
+        )
+    else:
+        original_narrative = None
 
     stage_trace.append({
-        "stage":           "guardrails",
-        "grounding":       grounding,
-        "compliance":      compliance,
-        "caveat_appended": bool(caveat_lines),
+        "stage":              "guardrails",
+        "grounding":          grounding,
+        "compliance":         compliance,
+        "guardrail_issues":   guardrail_issues,
+        "narrative_replaced": bool(guardrail_issues),
+        # Preserve the original narrative in the log even when replaced,
+        # so analysts can inspect what was suppressed.
+        **({"original_narrative": original_narrative} if original_narrative else {}),
     })
 
     return {
