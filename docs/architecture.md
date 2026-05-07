@@ -45,19 +45,26 @@ In Reason mode, narration switches to a tier-2 model (Claude Opus / GPT-OSS-120B
 
 ### 5. Guardrails
 
-A deterministic post-narration layer runs after every narrate call. It never suppresses a response — instead it appends a visible caveat to the narrative when issues are detected (soft-block). Results are also recorded in `stage_trace` for logging and observability.
+A deterministic post-narration layer runs after every narrate call. Results are always recorded in `stage_trace` for logging and observability. Two distinct actions are possible depending on severity:
+
+- **Groundedness failure** (>30% of extracted numbers unmatched against query results) — hard-block. The narrative is **replaced entirely** with a brief "cannot provide a reliable answer" message containing only an issue code-name (`numeric_validation_failed`). The original narrative is preserved in `stage_trace` for analyst inspection; nothing is exposed to the user.
+- **Compliance violation** — log-only. The tier-0 LLM scan result is written to `stage_trace` and the markdown log. The narrative is **never modified** based on compliance findings alone. Tier-0 models are too unreliable for user-facing violation text; the check exists for offline analysis and eval harness use only.
 
 **`verify_groundedness(narrative, queries)`** — no LLM call. Uses regex to extract all numeric tokens (integers, decimals, thousand-separated, K/M/B suffixes) and named entities (title-case sequences, ALL-CAPS codes) from the narrative. Each is checked against the concatenated query result strings, with normalisation (comma stripping, K→1000/M→1000000/B→1000000000 expansion, case-insensitive entity matching). Year tokens (2010–2029) are excluded to prevent systematic false positives on date-heavy narratives. Returns `{numbers_found, numbers_unmatched, entities_found, entities_unmatched, unmatched_samples}`.
 
-A ⚠ groundedness caveat is appended to the narrative when more than 30% of extracted numbers are unmatched — at lower rates unmatched tokens are typically noise from stylistic phrasing; above 30% the balance tips toward fabrication risk.
+When more than 30% of extracted numbers are unmatched, the narrative is hard-blocked and replaced — at lower rates unmatched tokens are typically noise from stylistic phrasing; above 30% the balance tips toward fabrication risk.
 
-**`check_compliance(narrative, llm_fn)`** — tier-0 LLM call (cheapest model). Scans the narrative against five rules:
+If all queries are `DOC_LOOKUP` (metadata questions with no data results), `verify_groundedness` returns a `skipped: True` result immediately. There are no data rows to ground against; running the check would produce a 100% unmatched false positive on every number in a schema description.
+
+**`check_compliance(narrative, llm_fn, schema_context)`** — tier-0 LLM call (cheapest model). Scans the narrative against five rules:
 
 1. Approximation language preceding exact-available numbers ("approximately", "around", "roughly")
 2. Evaluative adjectives ("impressive", "concerning", "alarming", "excellent")
 3. Motivational inference from behavioural data alone
 4. Currency or unit contradicting the schema (e.g. USD when schema specifies BRL)
 5. Numerical or categorical claims absent from query results
+
+The `schema_context` parameter injects a ≤800-char excerpt from the data model into the compliance prompt, giving the tier-0 model the ground truth it needs to detect rule 4 (currency/unit drift). Without it, "USD" in a narrative cannot be flagged — the checker has no schema to compare against.
 
 The narrative is capped at 3,000 characters before the compliance prompt to protect small-context tier-0 models from silent truncation. On failure, `violations=-1` is returned — distinguishable from `violations=0` (clean) for dashboards and log queries.
 
@@ -98,7 +105,7 @@ Each case has both a deterministic Python validator (lambda) and an LLM-assessed
 
 `run_eval()` accepts an optional `assessor_llm_fn` parameter to enable cross-model grading — a different backend grades the answers, removing the self-grading bias of using the same model as both answerer and assessor.
 
-### Guardrail injection eval (18 cases)
+### Guardrail injection eval (16 cases)
 
 The 18-case injection suite is in `_data/guardrail_test_cases.py`. It tests guardrail components by injecting adversarial content at controlled pipeline stages rather than relying on a model to hallucinate naturally:
 

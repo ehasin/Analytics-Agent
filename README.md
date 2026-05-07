@@ -28,7 +28,7 @@ LLM-driven analytics agents fail in characteristic ways: they hallucinate number
 
 ## Architecture
 
-The agent runs a 5-stage pipeline per turn:
+The agent runs a 6-stage pipeline per turn:
 
 ```
 User question
@@ -72,8 +72,9 @@ User question
 │    • verify_groundedness: regex number/entity   │
 │      extraction vs. query results               │
 │    • check_compliance: 5-rule LLM scan          │
-│    • Soft-block: ⚠ caveat appended when issues  │
-│      detected; response never suppressed        │
+│    • Hard-block: narrative replaced with issue  │
+│      code-name on groundedness failure (>30%    │
+│      unmatched numbers); compliance is log-only │
 └─────────────────────────────────────────────────┘
     │
     ▼
@@ -129,7 +130,7 @@ Analytics-Agent/
 │   └── _data/
 │       ├── olist_schema_and_datasets.py   # data loader
 │       ├── olist_test_cases.py            # 50-case eval suite
-│       └── guardrail_test_cases.py        # 18-case guardrail injection suite
+│       └── guardrail_test_cases.py        # 16-case guardrail injection suite
 ├── notebooks/
 │   └── Agentic_AI_Analytics_Bot.ipynb    # Colab PoC + eval entry point
 └── docs/
@@ -184,13 +185,14 @@ g_results = run_guardrail_eval(agent_fn=agent, execute_fn=execute, llm_fn=llm,
 
 ## Status
 
-`v1.6.0` — deterministic guardrails added (guard_sql, verify_groundedness, check_compliance, injection eval harness). Active areas: guardrail eval run on full 68-case suite, prompt caching once prompts stabilize.
+`v1.6.1` — guardrail hardening pass: hard-block replace on groundedness failure; schema context injected into compliance prompt (currency/unit drift detection); DOC_LOOKUP false-positive fix; guard_blocks stage_trace for retry observability; scientific notation, rounding tolerance, and range-notation false-positive fixes. 50/50 standard eval · 16/16 guardrail injection eval.
 
 ## Changelog
 
 | Version | Summary |
 |---|---|
-| `v1.6.0` | Deterministic guardrails: `guard_sql` (sqlglot AST, SELECT-only), `verify_groundedness` (regex number/entity check vs. query results), `check_compliance` (tier-0 LLM, 5 rules). Soft-block caveat appended to narrative on violations. Injection-based eval harness (18 cases: SQL, narrative, prompt). Targeted SQL retry prompt. Gemini 180s timeout. Cross-model grading in `run_eval`. |
+| `v1.6.1` | Guardrail hardening: hard-block replace on groundedness failure (>30% unmatched numbers); schema context injected into `check_compliance` for currency/unit drift detection; DOC_LOOKUP-only narratives skip groundedness (no data to ground against); `guard_blocks` in `stage_trace` for retry observability; scientific notation expansion, rounding tolerance, and range-notation false-positive fixes in `verify_groundedness`; currency codes added to entity stoplist (BRL/USD etc.); 16-case injection eval suite (was 15). |
+| `v1.6.0` | Deterministic guardrails: `guard_sql` (sqlglot AST, SELECT-only), `verify_groundedness` (regex number/entity check vs. query results), `check_compliance` (tier-0 LLM, 5 rules). Narrative caveat appended on violations. Injection-based eval harness. Targeted SQL retry prompt. Gemini 180s timeout. Cross-model grading in `run_eval`. |
 | `v1.5.8` | Feature-complete baseline: 50/50 eval, three-tier model routing, rolling session summary, structured DB logging, Streamlit deployment. |
 
 ## License

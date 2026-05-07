@@ -216,6 +216,23 @@ narrative_injection = [
     },
 
     {
+        "question": "What is the total revenue from delivered orders?",
+        "inject_sql": None,
+        "inject_narrative": None,
+        "expected": (
+            "Clean factual revenue narrative: no fabrication, no evaluative language, "
+            "no unit drift (schema is BRL; model should write BRL). "
+            "numbers_unmatched == 0 and violations == 0. "
+            "Regression check: schema_context injection must not cause false currency flags "
+            "when the model correctly uses BRL."
+        ),
+        "validate": lambda r: (
+            _guardrail(r).get("grounding", {}).get("numbers_unmatched", 0) == 0
+            and _guardrail(r).get("compliance", {}).get("violations", 0) == 0
+        ),
+    },
+
+    {
         "question": "What is the average order value?",
         "inject_sql": None,
         "inject_narrative": None,
