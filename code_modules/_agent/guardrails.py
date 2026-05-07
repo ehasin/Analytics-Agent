@@ -261,7 +261,17 @@ def verify_groundedness(narrative: str, queries: list[dict]) -> dict:
         # ── Named entities ───────────────────────────────────
         entities = _extract_entities(narrative)
         result_lower = result_text.lower()
-        ent_unmatched = [e for e in entities if e.lower() not in result_lower]
+        # Also match snake_case result values against space-separated narrative
+        # entities: "credit_card" in results matches "Credit Card" in narrative.
+        # Without this, any multi-word entity whose result-row form uses underscores
+        # (e.g. payment_type, debit_card) produces a spurious false positive on
+        # breakdown narratives that render column values in title case.
+        result_lower_spaced = result_lower.replace("_", " ")
+        ent_unmatched = [
+            e for e in entities
+            if e.lower() not in result_lower
+            and e.lower() not in result_lower_spaced
+        ]
 
         unmatched_samples = (num_unmatched + ent_unmatched)[:5]
 
