@@ -25,6 +25,7 @@ def run_eval(
     logs_dir: str | Path | None = None,
     mode: int = 0,
     assessor_llm_fn=None,
+    log_prefix: str = "",
 ) -> dict:
     """Run multiple named test sets through the agent.
 
@@ -219,6 +220,7 @@ def run_eval(
             total_passed=total_passed, total_count=total_count,
             by_set=by_set, summary_rows=summary_rows,
             body_parts=log_body_parts, critical_error=critical_error,
+            log_prefix=log_prefix,
         )
 
         from IPython.display import display, HTML
@@ -245,6 +247,7 @@ def run_guardrail_eval(
     logs_dir: str | Path | None = None,
     mode: int = 0,
     assessor_llm_fn=None,
+    log_prefix: str = "",
 ) -> dict:
     """Injection-based evaluation for guardrail components.
 
@@ -399,7 +402,8 @@ def run_guardrail_eval(
         logs_dir = Path(logs_dir)
         logs_dir.mkdir(parents=True, exist_ok=True)
         ts = started.replace("-", "_").replace(" ", "_").replace(":", "_")[:16]
-        log_path = logs_dir / f"guardrail_log_{ts}.md"
+        fname = f"{log_prefix}guardrail_log_{ts}.md" if log_prefix else f"guardrail_log_{ts}.md"
+        log_path = logs_dir / fname
         header = (
             f"# {name}\n\n**Started:** {started}\n**Mode:** {mode}\n"
             f"**Cases:** {total}\n\n## Summary: {passed}/{total} passed\n\n---\n\n"
@@ -426,13 +430,14 @@ def run_guardrail_eval(
 def _write_log_file(
     logs_dir, name, started, mode, test_sets, total_questions,
     total_passed, total_count, by_set, summary_rows, body_parts,
-    critical_error,
+    critical_error, log_prefix: str = "",
 ):
     """Assemble the log: header → summary → detail body. Write once."""
     logs_dir = Path(logs_dir)
     logs_dir.mkdir(parents=True, exist_ok=True)
     ts_file = started.replace("-", "_").replace(" ", "_").replace(":", "_")[:16]
-    log_path = logs_dir / f"validation_log_{ts_file}.md"
+    fname = f"{log_prefix}validation_log_{ts_file}.md" if log_prefix else f"validation_log_{ts_file}.md"
+    log_path = logs_dir / fname
 
     parts = []
 

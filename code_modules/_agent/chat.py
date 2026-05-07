@@ -27,7 +27,9 @@ from _skills.session_logger import SessionLogger
 
 # ── Factory ──────────────────────────────────────────────────
 
-def create_chat_fn(agent_fn, llm_fn, logs_dir, backend: str, model_name: str):
+def create_chat_fn(
+    agent_fn, llm_fn, logs_dir, backend: str, model_name: str, log_prefix: str = ""
+):
     """Return a zero-arg chat() function with all dependencies baked in.
 
     Args:
@@ -39,6 +41,8 @@ def create_chat_fn(agent_fn, llm_fn, logs_dir, backend: str, model_name: str):
         logs_dir:    Path to Logs directory
         backend:     backend name (for display / log header)
         model_name:  tier-1 model string (for log header)
+        log_prefix:  optional filename prefix, e.g. "Project_1.0_branch_"
+                     prepended to "chat_log_YYYY_MM_DD_HH_MM.md"
     """
 
     def chat():
@@ -51,6 +55,7 @@ def create_chat_fn(agent_fn, llm_fn, logs_dir, backend: str, model_name: str):
 
         logger = SessionLogger(
             logs_dir=logs_dir, backend=backend, model_name=model_name,
+            prefix=f"{log_prefix}chat_log" if log_prefix else "chat_log",
         )
 
         print(f"Analytics Agent [{backend}]  •  {MODE_NAMES[current_mode]} mode (auto)")
