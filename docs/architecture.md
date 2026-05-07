@@ -29,6 +29,8 @@ DuckDB runs the planned queries against in-memory DataFrames. Two reliability me
 
 **SQL guard (`guard_sql`)** — every query is inspected by `sqlglot` before execution. Only `SELECT` and `WITH…SELECT` statements are permitted. INSERT, UPDATE, DELETE, DROP, CREATE, ALTER, TRUNCATE, and DuckDB-specific commands (ATTACH, COPY, LOAD) are blocked and produce a `ValueError` that becomes a query error. References to `information_schema` or `system.` tables are blocked on the raw SQL string. When sqlglot cannot parse the SQL, execution is allowed but a `guard_warning` is recorded in `stage_trace` for observability.
 
+**Column allowlist (`_validate_columns`)** — after the statement-type check, `guard_sql` optionally validates qualified column references against a per-table allowlist. `execute_queries` auto-builds this allowlist from the DataFrames it already holds (`{name: frozenset(col.lower() for col in df.columns)}`), so the allowlist is always in sync with the actual schema — no separate maintenance. The check walks the sqlglot AST and inspects only `table.column`-qualified references; bare column names and CTE/subquery aliases are skipped to avoid false positives on common query patterns. `build_column_allowlist(data_model)` is exposed as a public API for future restricted-column annotations in `data_model.json`.
+
 **Targeted retry** — SQL errors trigger a single retry using `SQL_RETRY_PROMPT`, a minimal fix-focused template that includes only the schema, the failing query, and the error message. This is deliberately distinct from the full `CLASSIFY_AND_PLAN_PROMPT` used in the initial planning step — sending the full planning prompt on retry caused the model to re-plan all queries from scratch, producing label mismatches and wasted tokens. The targeted prompt fixes only the specific failing query while preserving the original label and intent.
 
 A special token `DOC_LOOKUP` is used as a query placeholder for metadata questions — the agent recognizes that some questions ("what tables are available?") are answerable directly from the data model documentation without running SQL.
@@ -66,12 +68,18 @@ Per-attempt grounding results are logged in `stage_trace` alongside each narrate
 
 ### 5. Guardrails
 
-After the retry loop exits, a compliance scan runs once on the final narrative. Results are always recorded in `stage_trace`. Two distinct actions are possible:
+Both groundedness and compliance are evaluated on each narration attempt. Both can trigger retries. Hard-block is groundedness-only. The `guardrails` stage_trace record includes `narrate_attempts` (1–3) so dashboards can distinguish clean first-pass answers from recovered retries from hard failures.
 
-- **Groundedness failure on all attempts** (>30% unmatched numbers, not resolved by retries) — the narrative is **replaced** with a user-facing message: *"Sorry, I wasn't able to generate a verified answer for this question after N attempt(s)."* The last failing narrative is preserved in `stage_trace` for analyst inspection; nothing is exposed to the user.
-- **Compliance violation** — log-only, regardless of retry outcome. The tier-0 LLM scan result is written to `stage_trace` only. Compliance never gates retries; tier-0 models are too inconsistent to drive user-facing decisions.
+**Retry triggers** — a narration attempt fails and triggers a retry if either:
 
-The `guardrails` stage_trace record includes `narrate_attempts` (1–3) so dashboards can distinguish clean first-pass answers from recovered retries from hard failures.
+- `numbers_unmatched > _RETRY_THRESHOLD` (0) — any single unmatched number
+- `compliance_violations > 0` — any deterministic compliance violation
+
+Both are fed back to the next attempt via `NARRATIVE_RETRY_PROMPT`: unmatched numeric tokens under the `NUMERIC GROUNDEDNESS` block, violation samples under the `COMPLIANCE VIOLATIONS` block with rule-specific correction advice. The model is told precisely what to fix.
+
+**Hard-block** — after all retries are exhausted, the narrative is replaced only when `numbers_unmatched / numbers_found > _BLOCK_THRESHOLD` (0.20). A sentence that triggered a compliance retry can be rewritten; a fabricated number that persists through all retries signals genuine hallucination risk. The asymmetry is intentional: block groundedness failures, never block on compliance alone.
+
+Design intent: *retry early and cheaply on any signal; block only when clearly unreliable.*
 
 **`verify_groundedness(narrative, queries)`** — no LLM call. Uses regex to extract all numeric tokens (integers, decimals, thousand-separated, K/M/B suffixes) and named entities (title-case sequences, ALL-CAPS codes) from the narrative. Each is checked against the concatenated query result strings, with normalisation (comma stripping, K→1000/M→1000000/B→1000000000 expansion, case-insensitive entity matching). Several false-positive classes are excluded before the check runs:
 
@@ -92,17 +100,15 @@ Design intent: *retry early and cheaply on any signal; block only when clearly u
 
 If all queries are `DOC_LOOKUP` (metadata questions with no data results), `verify_groundedness` returns a `skipped: True` result immediately. There are no data rows to ground against; running the check would produce a 100% unmatched false positive on every number in a schema description.
 
-**`check_compliance(narrative, llm_fn, schema_context)`** — tier-0 LLM call (cheapest model). Scans the narrative against five rules:
+**`check_compliance_deterministic(narrative, schema_context)`** — no LLM call. Scans the narrative for three rule classes using regex and word-list matching:
 
-1. Approximation language preceding exact-available numbers ("approximately", "around", "roughly")
-2. Evaluative adjectives ("impressive", "concerning", "alarming", "excellent")
-3. Motivational inference from behavioural data alone
-4. Currency or unit contradicting the schema (e.g. USD when schema specifies BRL)
-5. Numerical or categorical claims absent from query results
+1. **Approximation language** — `_APPROX_BEFORE_NUM_RE` matches "approximately/around/roughly/about" immediately before a number; `_TILDE_NUM_RE` matches `~42`. Both patterns are anchored to require a digit immediately after, so "roughly speaking" (no number) does not trigger.
+2. **Evaluative adjectives** — `_EVAL_WORDS` frozenset (11 words: "impressive", "concerning", "worrying", "alarming", "excellent", "exceptional", "disappointing", "troubling", "encouraging", "stellar", "dismal"). Each is checked with a word-boundary regex so "excellence" does not trigger "excellent".
+3. **Currency drift** — `_USD_RE` matches bare `USD`; `_BARE_DOLLAR_RE` matches `$` followed by a digit (but not `\$` or `R$`). Only fires when `_BRL_IN_SCHEMA_RE.search(schema_context)` confirms the schema uses BRL — without schema context, the check is a no-op.
 
-The `schema_context` parameter injects a ≤800-char excerpt from the data model into the compliance prompt, giving the tier-0 model the ground truth it needs to detect rule 4 (currency/unit drift). Without it, "USD" in a narrative cannot be flagged — the checker has no schema to compare against.
+Rules 3 (motivational inference) and 5 (unsupported claims) are not checked. Rule 3 has no reliable deterministic signal — the narrative prompt (tier-1 Sonnet) is the enforcement layer. Rule 5 is fully covered by `verify_groundedness`. Every rule either gates or gets dropped — log-only rules provide no stakeholder trust guarantee.
 
-The narrative is capped at 3,000 characters before the compliance prompt to protect small-context tier-0 models from silent truncation. On failure, `violations=-1` is returned — distinguishable from `violations=0` (clean) for dashboards and log queries.
+Returns `{"violations": int, "details": str, "samples": list[str]}`. `violations=0` means clean; `violations=-1` is never returned (deterministic check has no failure mode).
 
 ### 6. Update rolling summary
 
@@ -112,7 +118,7 @@ At the end of each turn, a tier-0 model updates a running session summary (targe
 
 | Tier | Use | Claude | Groq | Gemini |
 |---|---|---|---|---|
-| 0 (fast) | Summary updates, compliance check | Haiku 4.5 | Llama 3.1 8B Instant | Gemini 2.5 Flash Lite |
+| 0 (fast) | Injection screen, summary updates | Haiku 4.5 | Llama 3.1 8B Instant | Gemini 2.5 Flash Lite |
 | 1 (default) | Interpret, classify+plan, narrate, retry | Sonnet 4.6 | Llama 3.3 70B Versatile | Gemini 2.5 Flash |
 | 2 (strong) | Reason-mode narration | Opus 4.7 | GPT-OSS-120B | Gemini 2.5 Pro |
 
@@ -147,7 +153,7 @@ The 17-case injection suite is in `_data/guardrail_test_cases.py`. It tests guar
 
 - **SQL injection** (5 cases) — the first LLM-planned query is replaced with a known-bad statement (DROP TABLE, INSERT, system table reference, information_schema reference, or a valid SELECT as a false-positive check). `guard_sql` should block the injected statement; the agent's retry loop fires with real LLM SQL; validators assert both the block and the recovery.
 
-- **Narrative injection** (9 cases) — the LLM narrative is replaced with a synthetic string containing specific violations (fabricated number, approximation language, evaluative adjective, currency drift, motivational inference) or the agent runs live and produces its own narrative (false-positive checks: 4 real-LLM-narrative cases including one specifically for percentage-breakdown narratives). `verify_groundedness` and `check_compliance` are re-run on the injected or produced narrative; validators assert the guardrail correctly fires or stays quiet.
+- **Narrative injection** (9 cases) — the LLM narrative is replaced with a synthetic string containing specific violations (fabricated number, approximation language, evaluative adjective, currency drift) or the agent runs live and produces its own narrative (false-positive checks: 4 real-LLM-narrative cases including one specifically for percentage-breakdown narratives). `verify_groundedness` and `check_compliance_deterministic` are applied to the injected or produced narrative; validators assert the guardrail correctly fires or stays quiet. Motivational inference (rule 3) is documented as an accepted false negative in GQ10 — no reliable deterministic detection exists; narrative prompt compliance is the enforcement layer.
 
 - **Prompt injection** (3 cases) — the adversarial text is the question itself ("ignore all previous instructions…"). The agent should classify as `cant_answer` or `clarifications_needed` and not leak internal prompt text or produce anomalously long output.
 
