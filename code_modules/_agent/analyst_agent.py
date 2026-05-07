@@ -367,6 +367,11 @@ def analyst_agent(
     compliance_violations = compliance.get("violations", 0)
 
     caveat_lines: list[str] = []
+    # 0.3 threshold: flag when more than 30% of extracted numbers are unmatched.
+    # At lower rates (1-2 unmatched out of many) unmatched tokens are typically
+    # noise from stylistic phrasing (e.g. "top 5 sellers"). At >30% the balance
+    # tips toward genuine fabrication risk. Tune this value if false-positive
+    # caveats appear too frequently on clean narratives in practice.
     if grounding_ratio > 0.3:
         samples = grounding.get("unmatched_samples", [])
         sample_str = ", ".join(samples[:3]) if samples else ""

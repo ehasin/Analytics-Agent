@@ -227,18 +227,29 @@ def check_compliance(
         response = llm_fn(prompt, tier=0)
 
         violations = 0
-        details = "none"
+        detail_lines: list[str] = []
+        in_details = False
 
         for line in response.splitlines():
             stripped = line.strip()
             if stripped.startswith("VIOLATIONS:"):
+                in_details = False
                 try:
                     violations = int(stripped.split(":", 1)[1].strip())
                 except ValueError:
                     pass
             elif stripped.startswith("DETAILS:"):
-                details = stripped.split(":", 1)[1].strip()
+                # Capture the first line of DETAILS inline, then continue
+                # collecting subsequent lines until the response ends.
+                # This preserves multi-violation detail text that spans lines.
+                first = stripped.split(":", 1)[1].strip()
+                if first:
+                    detail_lines.append(first)
+                in_details = True
+            elif in_details and stripped:
+                detail_lines.append(stripped)
 
+        details = " | ".join(detail_lines) if detail_lines else "none"
         return {"violations": violations, "details": details}
 
     except Exception:

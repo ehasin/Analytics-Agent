@@ -294,11 +294,16 @@ def run_guardrail_eval(
         expected      = case.get("expected", "")
 
         # ── Build injecting execute_fn ────────────────────
-        first_call = [True]
+        # Use a class to hold injection state so the closure is explicit and
+        # readable — avoids the mutable-list [True] nonlocal workaround.
+        class _Injector:
+            fired = False
+
+        _inj = _Injector()
 
         def _injecting_execute(queries, tables, _isql=inject_sql):
-            if _isql and first_call[0]:
-                first_call[0] = False
+            if _isql and not _inj.fired:
+                _inj.fired = True
                 if queries:
                     queries[0]["code"] = _isql
                     queries[0]["result"] = None
