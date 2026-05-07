@@ -1,8 +1,8 @@
 # Agentic AI Analytics Bot
 
-A production-grade agentic analytics system that turns natural language questions into validated SQL, executes them against a real e-commerce dataset, and narrates the findings — with explicit guardrails against the failure modes that typically break LLM-driven analytics agents.
+A production-grade agentic analytics system that turns natural language questions into validated SQL, executes them against a real e-commerce dataset, and narrates the findings — with deterministic guardrails against the failure modes that typically break LLM-driven analytics agents.
 
-**[▶ Try the live demo](https://analytics-agent-demo.streamlit.app)** &nbsp;·&nbsp; **[📓 Original Colab PoC](notebooks/Agentic_AI_Analytics_Bot_v1_5_8.ipynb)** &nbsp;·&nbsp; **[📊 Validation results](docs/validation.md)**
+**[▶ Try the live demo](https://analytics-agent-demo.streamlit.app)** &nbsp;·&nbsp; **[📓 Original Colab PoC](notebooks/Agentic_AI_Analytics_Bot.ipynb)** &nbsp;·&nbsp; **[📊 Validation results](docs/validation.md)**
 
 ---
 
@@ -22,7 +22,7 @@ Mode selection is automatic per turn (LLM-inferred from the question and convers
 
 ## Why this is interesting
 
-LLM-driven analytics agents fail in characteristic ways: they hallucinate numbers, fabricate column names, answer the wrong question, or paper over data gaps with confident-sounding prose. This project is an opinionated take on how to prevent each of those failure modes — with an evaluation suite that tests for them explicitly.
+LLM-driven analytics agents fail in characteristic ways: they hallucinate numbers, fabricate column names, answer the wrong question, or paper over data gaps with confident-sounding prose. This project is an opinionated take on how to prevent each of those failure modes — with deterministic post-processing guardrails and an evaluation suite that tests for them explicitly.
 
 **50/50 pass rate** on a 50-case validation suite spanning six categories: metadata, easy lookups, hard analytical queries, misleading questions, multi-stage analysis, and realistic business questions. Validation methodology and full results are in [`docs/validation.md`](docs/validation.md).
 
@@ -54,6 +54,8 @@ User question
     ▼
 ┌─────────────────────────────────────────────────┐
 │ 3. Execute (DuckDB) + retry on SQL error        │
+│    • AST-level guard: SELECT-only enforcement   │
+│    • Targeted per-query retry prompt            │
 └─────────────────────────────────────────────────┘
     │
     ▼
@@ -66,65 +68,76 @@ User question
     │
     ▼
 ┌─────────────────────────────────────────────────┐
-│ 5. Update rolling session summary (tier 0)      │
+│ 5. Guardrails (deterministic + tier-0 LLM)      │
+│    • verify_groundedness: regex number/entity   │
+│      extraction vs. query results               │
+│    • check_compliance: 5-rule LLM scan          │
+│    • Soft-block: ⚠ caveat appended when issues  │
+│      detected; response never suppressed        │
+└─────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────┐
+│ 6. Update rolling session summary (tier 0)      │
 └─────────────────────────────────────────────────┘
 ```
 
 ## Reliability principles
 
-Three principles drive the design — applied consistently across prompts, classification, and post-processing:
+Four principles drive the design — applied consistently across prompts, classification, execution, and post-processing:
 
 1. **Epistemic honesty** — every question is classified into `can_answer` / `cant_answer` / `clarifications_needed` *before* SQL is generated. The agent declines to answer rather than invent.
 2. **Numeric fidelity** — the narration prompt forbids the model from rounding, paraphrasing, or retyping numbers from memory. All figures are copied character-by-character from query results.
 3. **Scope discipline** — query scope is calibrated to the question, not maxed out by default. Retrieve mode generates *only* the queries needed; Explore adds proportional context; Reason decomposes empirically without overclaiming causation.
+4. **Deterministic verification** — a post-narration guardrail layer extracts numbers and named entities from the narrative and checks them against query results without any LLM call. A separate tier-0 compliance scan flags approximation language, evaluative adjectives, motivational inference, and currency drift.
 
-These translate into concrete guardrails in [`code_modules/_agent/prompts.py`](code_modules/_agent/prompts.py) — the central place where the agent's behaviour is shaped.
+These translate into concrete guardrails in [`code_modules/_agent/prompts.py`](code_modules/_agent/prompts.py) and [`code_modules/_agent/guardrails.py`](code_modules/_agent/guardrails.py).
 
 ## Known limitations
 
 This is a portfolio/PoC project. The architecture is designed for reliability, but several gaps exist between the current implementation and what a production analyst-replacement system would require.
 
-**Hallucination guardrails are prompt-side only.** Every defence against fabrication is an instruction to the model — there is no deterministic post-processing layer that extracts numbers from the narrative and verifies them against query results. "Copy character-by-character" is a rule, not a check. A numeric verifier that cross-references narrative figures against query output is the single highest-leverage missing component.
-
-**Eval scope.** The 50-case suite is a meaningful signal but below the statistical noise floor for tight pass-rate claims — a single regression looks like a 2% drop. All 50 cases also use the same model as both answerer and assessor (self-grading bias). The backend abstraction already supports cross-model grading; it just hasn't been run.
-
-**SQL execution is unguarded.** `duckdb_utils.run_query` executes whatever SQL the LLM emits with no AST inspection. A SELECT-only allowlist (via `sqlglot`) would close the surface in ~10 lines; it isn't implemented.
+**Eval scope.** The 50-case suite is a meaningful signal but below the statistical noise floor for tight pass-rate claims — a single regression looks like a 2% drop. Cross-model grading is now supported via `assessor_llm_fn` in `run_eval()`; using the same model as answerer and assessor is self-grading and should be avoided for rigorous measurement.
 
 **No cost or abuse controls on the public demo.** Any visitor can trigger unlimited Reason-mode queries (the most expensive tier) against the owner's API key. There is no per-session token budget, no daily spend cap, and no rate limiting.
 
-**Prompt injection is not screened.** User input is concatenated directly into planning prompts. There is no pre-classifier for instruction-override patterns ("ignore previous instructions", etc.).
+**Prompt injection is not screened.** User input is concatenated directly into planning prompts. A prompt-injection pre-classifier is present in the guardrail eval test cases but not deployed as a runtime filter.
 
-None of these are architectural — they're implementation gaps. The project is accurate about what it is: a well-engineered agent framework that demonstrates the *approach* to reliability, not a deployed system with the trust layer built out.
+**Geo-IP logging is HTTP.** The ip-api.com free tier does not support HTTPS; user IPs are sent over a plaintext connection for session geo-tagging. This is a known constraint of the free tier.
+
+None of these are architectural — they're implementation gaps. The project is accurate about what it is: a well-engineered agent framework that demonstrates the *approach* to reliability, not a deployed system with the full trust layer built out.
 
 ## Repository layout
 
 ```
-agentic-analytics-bot/
+Analytics-Agent/
 ├── streamlit_app.py             # Streamlit entry point (live demo)
 ├── streamlit_session_logger.py  # Structured DB logging (Neon / SQLite)
 ├── data_model.json              # Schema + business metadata
 ├── code_modules/
 │   ├── _agent/                  # Pipeline stages + prompts
-│   │   ├── analyst_agent.py     #   classify+plan → execute → narrate
+│   │   ├── analyst_agent.py     #   classify+plan → execute → narrate → guardrails
+│   │   ├── guardrails.py        #   verify_groundedness + check_compliance
 │   │   ├── chat.py              #   interactive loop + slash commands
 │   │   ├── conversation_processor.py  # turn resolution, mode, summary
 │   │   └── prompts.py           #   all LLM prompts, centralized
 │   ├── _skills/                 # Backend-agnostic utilities
 │   │   ├── llm_backends.py      #   unified Claude/Groq/Gemini interface
-│   │   ├── duckdb_utils.py      #   query execution + schema validation
+│   │   ├── duckdb_utils.py      #   query execution + guard_sql + schema validation
 │   │   ├── session_logger.py    #   markdown session logs (Colab)
-│   │   └── eval_runner.py       #   batch validation runner
+│   │   └── eval_runner.py       #   batch validation + guardrail injection eval
 │   └── _data/
 │       ├── olist_schema_and_datasets.py   # data loader
-│       └── olist_test_cases.py            # 50-case eval suite
+│       ├── olist_test_cases.py            # 50-case eval suite
+│       └── guardrail_test_cases.py        # 18-case guardrail injection suite
 ├── notebooks/
-│   └── Agentic_AI_Analytics_Bot_v1_5_8.ipynb   # original Colab PoC
+│   └── Agentic_AI_Analytics_Bot.ipynb    # Colab PoC + eval entry point
 └── docs/
     ├── architecture.md          # deeper architecture notes
     └── validation.md            # eval methodology + results
 ```
 
-The Colab notebook in `/notebooks` is the original prototype, kept as-is for reference. The `code_modules/` package is the production-grade refactor it grew into.
+The Colab notebook in `/notebooks` is the original prototype, kept as a working eval entry point. The `code_modules/` package is the production-grade refactor it grew into.
 
 ## Running locally
 
@@ -145,7 +158,21 @@ The Streamlit app accepts an API key directly in the UI sidebar, so a local `.en
 
 ## Running the eval suite
 
-The notebook (`notebooks/Agentic_AI_Analytics_Bot_v1_5_8.ipynb`) is the intended entry point for the eval suite — it provides Drive-mounted logging and progress display. Block 7 runs all 50 cases against any selected backend.
+The notebook (`notebooks/Agentic_AI_Analytics_Bot.ipynb`) is the intended entry point for the eval suite — it provides Drive-mounted logging and progress display. Block 7 runs all 50 standard cases; the guardrail injection eval (`run_guardrail_eval`) runs separately against the 18 injection test cases in `_data/guardrail_test_cases.py`.
+
+To run programmatically with cross-model grading:
+
+```python
+from code_modules._skills.eval_runner import run_eval, run_guardrail_eval
+from code_modules._data.guardrail_test_cases import all_guardrail_cases
+
+# Cross-model: different backend grades the answers
+results = run_eval(agent_fn=agent, llm_fn=llm, assessor_llm_fn=other_llm, ...)
+
+# Guardrail injection eval
+g_results = run_guardrail_eval(agent_fn=agent, execute_fn=execute, llm_fn=llm,
+                                test_cases=all_guardrail_cases)
+```
 
 ## Tech stack
 
@@ -157,7 +184,14 @@ The notebook (`notebooks/Agentic_AI_Analytics_Bot_v1_5_8.ipynb`) is the intended
 
 ## Status
 
-`v1.5.8` — feature-complete, validation passing, deployed. Active areas: usage analytics logging, prompt caching once prompts stabilize.
+`v1.6.0` — deterministic guardrails added (guard_sql, verify_groundedness, check_compliance, injection eval harness). Active areas: guardrail eval run on full 68-case suite, prompt caching once prompts stabilize.
+
+## Changelog
+
+| Version | Summary |
+|---|---|
+| `v1.6.0` | Deterministic guardrails: `guard_sql` (sqlglot AST, SELECT-only), `verify_groundedness` (regex number/entity check vs. query results), `check_compliance` (tier-0 LLM, 5 rules). Soft-block caveat appended to narrative on violations. Injection-based eval harness (18 cases: SQL, narrative, prompt). Targeted SQL retry prompt. Gemini 180s timeout. Cross-model grading in `run_eval`. |
+| `v1.5.8` | Feature-complete baseline: 50/50 eval, three-tier model routing, rolling session summary, structured DB logging, Streamlit deployment. |
 
 ## License
 
