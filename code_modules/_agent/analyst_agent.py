@@ -27,7 +27,8 @@ import re, time
 
 from .prompts import (
     CLASSIFY_AND_PLAN_PROMPT, PLAN_SCOPE_RETRIEVE, PLAN_SCOPE_EXPLORE,
-    NARRATIVE_PROMPT, NARRATIVE_FMT_RETRIEVE, NARRATIVE_FMT_EXPLORE, NARRATIVE_FMT_REASON,
+    NARRATIVE_PROMPT, NARRATIVE_RETRY_PROMPT,
+    NARRATIVE_FMT_RETRIEVE, NARRATIVE_FMT_EXPLORE, NARRATIVE_FMT_REASON,
     CONTEXT_NOTE_PLAN, CONTEXT_NOTE_NARRATE, SQL_RETRY_PROMPT,
 )
 from .guardrails import verify_groundedness, check_compliance
@@ -207,6 +208,72 @@ def format_narrative(question, queries, mode, schema, llm_fn, user_context=None,
     return narrative, stage_record
 
 
+# Maximum total narration attempts (1 original + up to 2 retries).
+# Retries only fire on deterministic groundedness failure; compliance is log-only.
+_MAX_NARRATE_ATTEMPTS = 3
+
+
+def format_narrative_retry(
+    question: str,
+    queries: list[dict],
+    mode: int,
+    schema: str,
+    llm_fn,
+    unmatched_samples: list[str],
+    attempt: int,
+    user_context: str | None = None,
+) -> tuple[str, dict]:
+    """Re-generate a narrative after a groundedness failure.
+
+    Feeds back the exact unmatched tokens so the model knows which derived
+    values (percentages, grand totals, computed differences) to omit.
+    Uses the same tier routing as format_narrative (tier 2 for Reason, else 1).
+
+    Args:
+        unmatched_samples:  list of raw token strings from verify_groundedness
+        attempt:            current attempt number (2 or 3)
+
+    Returns (narrative, stage_record).
+    """
+    results_text = ""
+    for q in queries:
+        results_text += f"\n[{q['type'].upper()}] {q['label']}\n"
+        if q.get("result"):
+            if q.get("code", "").strip() == "DOC_LOOKUP":
+                safe_result = q["result"]
+            else:
+                safe_result, _ = _truncate_for_narrate(q["result"])
+            results_text += f"Result:\n{safe_result}\n"
+        else:
+            results_text += f"Error: {q.get('error')}\n"
+
+    context_note = CONTEXT_NOTE_NARRATE.format(user_context=user_context) if user_context else ""
+    fmt = {0: NARRATIVE_FMT_RETRIEVE, 1: NARRATIVE_FMT_EXPLORE, 2: NARRATIVE_FMT_REASON}[mode]
+
+    unmatched_list = (
+        ", ".join(repr(s) for s in unmatched_samples)
+        if unmatched_samples
+        else "unknown — rewrite using only values present in result rows"
+    )
+
+    prompt = NARRATIVE_RETRY_PROMPT.format(
+        question=question,
+        schema=schema,
+        context_note=context_note,
+        results_text=results_text,
+        attempt=attempt,
+        unmatched_list=unmatched_list,
+        fmt=fmt,
+    )
+
+    tier = 2 if mode == 2 else 1
+    t0 = time.time()
+    narrative = llm_fn(prompt, tier=tier)
+    elapsed = round(time.time() - t0, 2)
+    stage_record = {"stage": "narrate", "tier": tier, "seconds": elapsed, "narrate_attempt": attempt}
+    return narrative, stage_record
+
+
 # ── Main agent entry point ───────────────────────────────────
 
 def analyst_agent(
@@ -218,7 +285,7 @@ def analyst_agent(
     mode: int = 0,
     user_context: str | None = None,
 ) -> dict:
-    """Analytics agent: classify+plan → execute → (retry) → narrate → guardrails.
+    """Analytics agent: classify+plan → execute → (SQL retry) → narrate → groundedness → (narrative retry) → compliance.
 
     Args:
         question:     user's question (already resolved if a follow-up)
@@ -350,55 +417,72 @@ def analyst_agent(
     raw_answer = "\n".join(primary) if primary else "No results"
     all_code = "\n\n".join([f"-- {q['label']}\n{q['code']}" for q in queries])
 
-    # Stage 3d: Narrate (tier 2 if Reason, else tier 1)
-    try:
-        narrative, narr_record = format_narrative(
-            question,
-            queries,
-            mode,
-            schema,
-            llm_fn,
-            user_context,
-            analysis_assumptions=analysis_assumptions,
-        )
-        stage_trace.append(narr_record)
-    except Exception as e:
-        narrative = f"(Narrative failed: {e})"
-
-    # Stage 4: Guardrails — deterministic groundedness check + tier-0 compliance scan.
+    # Stages 3d + 4: Narrate → groundedness check → retry loop
     #
     # UX CONTRACT:
-    #   - A clean result → narrative is returned unchanged. No notice, no caveat.
-    #   - Deterministic groundedness failure → narrative is REPLACED with a brief
-    #     "cannot answer" message containing only an issue code-name. No details
-    #     are exposed to the user — full grounding and compliance data go to
-    #     stage_trace and the DB log only.
-    #   - Compliance check (LLM-based, tier-0) → log only, NEVER surfaced to the
-    #     user. Tier-0 models are too unreliable for user-facing violation text;
-    #     the check exists for offline analysis and eval harness use only.
+    #   - Clean result on any attempt → narrative returned unchanged, no notice.
+    #   - Groundedness failure → retry up to _MAX_NARRATE_ATTEMPTS total, feeding
+    #     the exact unmatched tokens back so the model knows what to avoid.
+    #   - All attempts exhausted → narrative replaced with a user-facing sorry
+    #     message; full detail preserved in stage_trace for analyst inspection.
+    #   - Compliance check (tier-0 LLM) → log-only on the final narrative.
+    #     Never gates retries; tier-0 models are too inconsistent for that.
     #
-    # 0.3 threshold: flag when >30% of extracted numbers are unmatched against
-    # query results. At lower rates unmatched tokens are typically noise from
-    # stylistic phrasing ("top 5", ordinal years, etc.). Above 30% the balance
-    # tips toward genuine fabrication risk.
-    grounding = verify_groundedness(narrative, queries)
+    # 0.3 threshold: >30% of extracted numbers unmatched → fabrication risk.
+    # Below that, unmatched tokens are typically stylistic noise.
+
+    grounding: dict = {}
+    guardrail_issues: list[str] = []
+    narrative = ""
+
+    for narrate_attempt in range(1, _MAX_NARRATE_ATTEMPTS + 1):
+        try:
+            if narrate_attempt == 1:
+                narrative, narr_record = format_narrative(
+                    question, queries, mode, schema, llm_fn,
+                    user_context, analysis_assumptions=analysis_assumptions,
+                )
+                narr_record["narrate_attempt"] = 1
+            else:
+                narrative, narr_record = format_narrative_retry(
+                    question, queries, mode, schema, llm_fn,
+                    unmatched_samples=grounding.get("unmatched_samples", []),
+                    attempt=narrate_attempt,
+                    user_context=user_context,
+                )
+            stage_trace.append(narr_record)
+        except Exception as e:
+            narrative = f"(Narrative failed: {e})"
+            break
+
+        # Deterministic groundedness check
+        grounding = verify_groundedness(narrative, queries)
+        num_found = grounding.get("numbers_found", 0)
+        num_unmatched = grounding.get("numbers_unmatched", 0)
+        grounding_ratio = num_unmatched / num_found if num_found > 0 else 0.0
+
+        guardrail_issues = []
+        if grounding_ratio > 0.3:
+            guardrail_issues.append("numeric_validation_failed")
+
+        if not guardrail_issues:
+            break  # Narrative passed — exit loop
+
+        # Log the per-attempt grounding failure so analysts can trace the retry.
+        stage_trace[-1]["grounding_failed"] = True
+        stage_trace[-1]["grounding_ratio"] = round(grounding_ratio, 3)
+        stage_trace[-1]["unmatched_samples"] = grounding.get("unmatched_samples", [])
+
+    # Compliance runs once on the final narrative — log-only regardless of outcome.
     compliance = check_compliance(narrative, llm_fn, schema_context=schema)
 
-    num_found = grounding.get("numbers_found", 0)
-    num_unmatched = grounding.get("numbers_unmatched", 0)
-    grounding_ratio = num_unmatched / num_found if num_found > 0 else 0.0
-
-    guardrail_issues: list[str] = []
-    if grounding_ratio > 0.3:
-        guardrail_issues.append("numeric_validation_failed")
-
     if guardrail_issues:
-        # Replace narrative entirely — do not leak grounding details to the user.
-        # The original narrative and full guardrail data are preserved in stage_trace.
+        # All attempts exhausted. Replace narrative with a user-facing message;
+        # preserve the last failing narrative in stage_trace for inspection.
         original_narrative = narrative
         narrative = (
-            "Unfortunately, I cannot provide a reliable answer at this stage. "
-            f"({', '.join(guardrail_issues)})"
+            f"Sorry, I wasn't able to generate a verified answer for this question "
+            f"after {narrate_attempt} attempt(s). ({', '.join(guardrail_issues)})"
         )
     else:
         original_narrative = None
@@ -409,8 +493,7 @@ def analyst_agent(
         "compliance":         compliance,
         "guardrail_issues":   guardrail_issues,
         "narrative_replaced": bool(guardrail_issues),
-        # Preserve the original narrative in the log even when replaced,
-        # so analysts can inspect what was suppressed.
+        "narrate_attempts":   narrate_attempt,
         **({"original_narrative": original_narrative} if original_narrative else {}),
     })
 

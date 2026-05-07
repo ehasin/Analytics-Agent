@@ -60,21 +60,23 @@ User question
     │
     ▼
 ┌─────────────────────────────────────────────────┐
-│ 4. Narrate (tier 1, or tier 2 in Reason mode)   │
-│    • Anti-fabrication rules                     │
-│    • Numeric fidelity guardrails                │
-│    • Truncation-aware response                  │
+│ 4. Narrate + groundedness retry loop            │
+│    (up to 3 attempts: 1 original + 2 retries)  │
+│    • attempt 1: NARRATIVE_PROMPT                │
+│      → verify_groundedness (deterministic)      │
+│      → pass → done                             │
+│    • attempts 2–3: NARRATIVE_RETRY_PROMPT       │
+│      feeds unmatched tokens back as feedback    │
+│      → verify_groundedness again               │
+│      → pass → done; exhausted → sorry msg      │
 └─────────────────────────────────────────────────┘
     │
     ▼
 ┌─────────────────────────────────────────────────┐
-│ 5. Guardrails (deterministic + tier-0 LLM)      │
-│    • verify_groundedness: regex number/entity   │
-│      extraction vs. query results               │
-│    • check_compliance: 5-rule LLM scan          │
-│    • Hard-block: narrative replaced with issue  │
-│      code-name on groundedness failure (>30%    │
-│      unmatched numbers); compliance is log-only │
+│ 5. Guardrails — compliance scan (tier-0 LLM)    │
+│    • check_compliance: 5-rule scan on final     │
+│      narrative — log-only, never gates retries  │
+│    • narrate_attempts logged in stage_trace     │
 └─────────────────────────────────────────────────┘
     │
     ▼
@@ -130,7 +132,7 @@ Analytics-Agent/
 │   └── _data/
 │       ├── olist_schema_and_datasets.py   # data loader
 │       ├── olist_test_cases.py            # 50-case eval suite
-│       └── guardrail_test_cases.py        # 16-case guardrail injection suite
+│       └── guardrail_test_cases.py        # 17-case guardrail injection suite
 ├── notebooks/
 │   └── Agentic_AI_Analytics_Bot.ipynb    # Colab PoC + eval entry point
 └── docs/
@@ -185,12 +187,14 @@ g_results = run_guardrail_eval(agent_fn=agent, execute_fn=execute, llm_fn=llm,
 
 ## Status
 
-`v1.6.1` — guardrail hardening pass: hard-block replace on groundedness failure; schema context injected into compliance prompt (currency/unit drift detection); DOC_LOOKUP false-positive fix; guard_blocks stage_trace for retry observability; scientific notation, rounding tolerance, and range-notation false-positive fixes. 50/50 standard eval · 16/16 guardrail injection eval.
+`v1.6.3` — narrative retry loop: groundedness failure now triggers up to 2 additional narration attempts before the user sees an error. Each retry receives the exact unmatched tokens as feedback via `NARRATIVE_RETRY_PROMPT`. Compliance check runs once on the final narrative only. `narrate_attempts` added to guardrails `stage_trace` record. 50/50 standard eval · 17/17 guardrail injection eval.
 
 ## Changelog
 
 | Version | Summary |
 |---|---|
+| `v1.6.3` | Narrative retry loop: groundedness failure (>30% unmatched numbers) now triggers up to 2 additional narration attempts instead of an immediate hard-block. Each retry receives the exact unmatched token list via `NARRATIVE_RETRY_PROMPT` so the model knows precisely which derived values to omit. Compliance scan runs once on the final narrative only, never gates retries. `narrate_attempts` added to guardrails `stage_trace`. User-facing fallback message updated for clarity. |
+| `v1.6.2` | `verify_groundedness` false-positive fix: percentage tokens stripped before number extraction. Percentages ("78.2%", "18%") are arithmetic derivatives of query data — never literally in raw result rows — so including them inflated the unmatched ratio on breakdown/distribution answers and triggered false hard-blocks (observed in 10× easy-set loop on Q6 revenue-by-payment-type). `_PCT_RE` strips them before `_extract_numbers` runs; absolute data values are unaffected. 17-case injection eval suite (was 16). |
 | `v1.6.1` | Guardrail hardening: hard-block replace on groundedness failure (>30% unmatched numbers); schema context injected into `check_compliance` for currency/unit drift detection; DOC_LOOKUP-only narratives skip groundedness (no data to ground against); `guard_blocks` in `stage_trace` for retry observability; scientific notation expansion, rounding tolerance, and range-notation false-positive fixes in `verify_groundedness`; currency codes added to entity stoplist (BRL/USD etc.); 16-case injection eval suite (was 15). |
 | `v1.6.0` | Deterministic guardrails: `guard_sql` (sqlglot AST, SELECT-only), `verify_groundedness` (regex number/entity check vs. query results), `check_compliance` (tier-0 LLM, 5 rules). Narrative caveat appended on violations. Injection-based eval harness. Targeted SQL retry prompt. Gemini 180s timeout. Cross-model grading in `run_eval`. |
 | `v1.5.8` | Feature-complete baseline: 50/50 eval, three-tier model routing, rolling session summary, structured DB logging, Streamlit deployment. |

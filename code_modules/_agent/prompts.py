@@ -330,6 +330,47 @@ TRUNCATED RESULT HANDLING (critical — applies whenever you see `[RESULT TRUNCA
 Answer:"""
 
 
+# ── Stage 3d-retry: Targeted narrative fix prompt ───────────
+# Used when verify_groundedness flags >30% of numbers in the first narrative
+# as unmatched against query results. The retry receives the exact tokens that
+# failed so the model knows precisely what to avoid rewriting.
+# Kept intentionally shorter than NARRATIVE_PROMPT — the model already has
+# context from the failed attempt; the goal is a tight corrective rewrite.
+
+NARRATIVE_RETRY_PROMPT = """\
+You are rewriting an analytics narrative that failed a numeric groundedness check.
+
+User question: {question}
+
+DATA MODEL (for column/table context):
+{schema}
+{context_note}
+Query results:
+{results_text}
+
+Your previous attempt (attempt {attempt}) was rejected because these values appeared \
+in the narrative but were not found verbatim in the query results above:
+  {unmatched_list}
+
+These are most likely derived values you computed (percentages, grand totals, \
+differences, running averages). Do NOT include any value that does not appear \
+verbatim in a result row above. If the question seems to call for a percentage or \
+total that is not in the results, omit it — do not compute it in prose.
+
+{fmt}
+
+General rules:
+- Copy numbers character-by-character from the query results. Never round, paraphrase, \
+or retype from memory.
+- Do not characterize results with evaluative adjectives (good/bad/impressive/concerning).
+- Do not infer human intent or motivation from behavioral data alone.
+- Do not expose query plumbing: no table names, column names, or verbatim data dumps. \
+Synthesize into prose.
+- If caveats restrict reliability or scope, list them at the end under "Caveats:".
+
+Answer:"""
+
+
 # ── Stage 5: Rolling summary update (end of turn) ───────────
 
 SUMMARY_UPDATE_PROMPT = """\

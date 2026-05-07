@@ -33,24 +33,54 @@ DuckDB runs the planned queries against in-memory DataFrames. Two reliability me
 
 A special token `DOC_LOOKUP` is used as a query placeholder for metadata questions — the agent recognizes that some questions ("what tables are available?") are answerable directly from the data model documentation without running SQL.
 
-### 4. Narrate
+### 4. Narrate → Groundedness → Retry loop
 
-The narration prompt is the most heavily engineered part of the system. It's where most hallucination risk lives, and where the reliability principles get enforced concretely:
+Narration and groundedness checking are interleaved in a retry loop (up to 3 total attempts: 1 original + 2 retries). The loop is:
 
-- **Numeric fidelity**: the model is instructed to copy numbers character-by-character from query results. Approximations must include the exact form alongside.
-- **Anti-fabrication**: when a query result is truncated (at a 50K char cap), the model must answer only from visible rows and explicitly state the truncation. No filling gaps with plausible-looking rows.
-- **Scope discipline**: separate format blocks for Retrieve / Explore / Reason ensure that response style matches mode intent.
+```
+attempt 1: format_narrative (NARRATIVE_PROMPT)
+           → verify_groundedness
+           → pass? → done. fail? → attempt 2
 
-In Reason mode, narration switches to a tier-2 model (Claude Opus / GPT-OSS-120B) for deeper reasoning. Other stages stay on the faster default tier.
+attempt 2: format_narrative_retry (NARRATIVE_RETRY_PROMPT)
+           feeds back exact unmatched tokens
+           → verify_groundedness
+           → pass? → done. fail? → attempt 3
+
+attempt 3: format_narrative_retry again with updated unmatched list
+           → verify_groundedness
+           → pass? → done. fail? → replace with sorry message
+```
+
+**`NARRATIVE_PROMPT`** (attempt 1) is the most heavily engineered part of the system:
+
+- **Numeric fidelity**: copy numbers character-by-character from query results; approximations must include the exact form alongside.
+- **Anti-fabrication**: truncated results (50K char cap) must be answered only from visible rows; no gap-filling.
+- **Scope discipline**: separate format blocks for Retrieve / Explore / Reason.
+
+In Reason mode, narration uses tier-2 (Claude Opus / GPT-OSS-120B). All other stages use the default tier-1.
+
+**`NARRATIVE_RETRY_PROMPT`** (attempts 2–3) is a targeted corrective rewrite. It receives the same question and query results, plus the specific unmatched tokens from `verify_groundedness.unmatched_samples`. The instruction is explicit: *do not include values not present verbatim in a result row — omit derived values (percentages, grand totals, differences) if they are not a column in the result.* This is analogous to `SQL_RETRY_PROMPT` for the SQL layer: minimal context, targeted fix, same analytical intent.
+
+Per-attempt grounding results are logged in `stage_trace` alongside each narrate record (`grounding_failed`, `grounding_ratio`, `unmatched_samples`) so the retry progression is fully inspectable.
 
 ### 5. Guardrails
 
-A deterministic post-narration layer runs after every narrate call. Results are always recorded in `stage_trace` for logging and observability. Two distinct actions are possible depending on severity:
+After the retry loop exits, a compliance scan runs once on the final narrative. Results are always recorded in `stage_trace`. Two distinct actions are possible:
 
-- **Groundedness failure** (>30% of extracted numbers unmatched against query results) — hard-block. The narrative is **replaced entirely** with a brief "cannot provide a reliable answer" message containing only an issue code-name (`numeric_validation_failed`). The original narrative is preserved in `stage_trace` for analyst inspection; nothing is exposed to the user.
-- **Compliance violation** — log-only. The tier-0 LLM scan result is written to `stage_trace` and the markdown log. The narrative is **never modified** based on compliance findings alone. Tier-0 models are too unreliable for user-facing violation text; the check exists for offline analysis and eval harness use only.
+- **Groundedness failure on all attempts** (>30% unmatched numbers, not resolved by retries) — the narrative is **replaced** with a user-facing message: *"Sorry, I wasn't able to generate a verified answer for this question after N attempt(s)."* The last failing narrative is preserved in `stage_trace` for analyst inspection; nothing is exposed to the user.
+- **Compliance violation** — log-only, regardless of retry outcome. The tier-0 LLM scan result is written to `stage_trace` only. Compliance never gates retries; tier-0 models are too inconsistent to drive user-facing decisions.
 
-**`verify_groundedness(narrative, queries)`** — no LLM call. Uses regex to extract all numeric tokens (integers, decimals, thousand-separated, K/M/B suffixes) and named entities (title-case sequences, ALL-CAPS codes) from the narrative. Each is checked against the concatenated query result strings, with normalisation (comma stripping, K→1000/M→1000000/B→1000000000 expansion, case-insensitive entity matching). Year tokens (2010–2029) are excluded to prevent systematic false positives on date-heavy narratives. Returns `{numbers_found, numbers_unmatched, entities_found, entities_unmatched, unmatched_samples}`.
+The `guardrails` stage_trace record includes `narrate_attempts` (1–3) so dashboards can distinguish clean first-pass answers from recovered retries from hard failures.
+
+**`verify_groundedness(narrative, queries)`** — no LLM call. Uses regex to extract all numeric tokens (integers, decimals, thousand-separated, K/M/B suffixes) and named entities (title-case sequences, ALL-CAPS codes) from the narrative. Each is checked against the concatenated query result strings, with normalisation (comma stripping, K→1000/M→1000000/B→1000000000 expansion, case-insensitive entity matching). Several false-positive classes are excluded before the check runs:
+
+- **Year tokens** (2010–2029) — present in factual narratives but rarely as bare integers in query results (stored as date strings/timestamps).
+- **Range-notation bounds** — numbers like "1" and "5" in "on a 1–5 scale" are schema-level scale descriptors, not data claims.
+- **Scale denominators** — "5" in "4.09 out of 5" is a schema maximum, not a queried value.
+- **Percentage tokens** — "78.2%" or "18%" are arithmetic derivatives the LLM computes from the raw rows it was given. They never appear literally in DuckDB result rows; including them inflated the unmatched ratio on any distribution/breakdown answer (e.g. revenue by payment type).
+
+Returns `{numbers_found, numbers_unmatched, entities_found, entities_unmatched, unmatched_samples}`.
 
 When more than 30% of extracted numbers are unmatched, the narrative is hard-blocked and replaced — at lower rates unmatched tokens are typically noise from stylistic phrasing; above 30% the balance tips toward fabrication risk.
 
@@ -105,13 +135,13 @@ Each case has both a deterministic Python validator (lambda) and an LLM-assessed
 
 `run_eval()` accepts an optional `assessor_llm_fn` parameter to enable cross-model grading — a different backend grades the answers, removing the self-grading bias of using the same model as both answerer and assessor.
 
-### Guardrail injection eval (16 cases)
+### Guardrail injection eval (17 cases)
 
-The 18-case injection suite is in `_data/guardrail_test_cases.py`. It tests guardrail components by injecting adversarial content at controlled pipeline stages rather than relying on a model to hallucinate naturally:
+The 17-case injection suite is in `_data/guardrail_test_cases.py`. It tests guardrail components by injecting adversarial content at controlled pipeline stages rather than relying on a model to hallucinate naturally:
 
 - **SQL injection** (5 cases) — the first LLM-planned query is replaced with a known-bad statement (DROP TABLE, INSERT, system table reference, information_schema reference, or a valid SELECT as a false-positive check). `guard_sql` should block the injected statement; the agent's retry loop fires with real LLM SQL; validators assert both the block and the recovery.
 
-- **Narrative injection** (8 cases) — the LLM narrative is replaced with a synthetic string containing specific violations (fabricated number, approximation language, evaluative adjective, currency drift, motivational inference) or clean text (false-positive checks). `verify_groundedness` and `check_compliance` are re-run on the injected narrative; validators assert the guardrail correctly fires or stays quiet.
+- **Narrative injection** (9 cases) — the LLM narrative is replaced with a synthetic string containing specific violations (fabricated number, approximation language, evaluative adjective, currency drift, motivational inference) or the agent runs live and produces its own narrative (false-positive checks: 4 real-LLM-narrative cases including one specifically for percentage-breakdown narratives). `verify_groundedness` and `check_compliance` are re-run on the injected or produced narrative; validators assert the guardrail correctly fires or stays quiet.
 
 - **Prompt injection** (3 cases) — the adversarial text is the question itself ("ignore all previous instructions…"). The agent should classify as `cant_answer` or `clarifications_needed` and not leak internal prompt text or produce anomalously long output.
 

@@ -260,6 +260,24 @@ narrative_injection = [
         ),
     },
 
+    {
+        "question": "What is the total revenue by payment type?",
+        "inject_sql": None,
+        "inject_narrative": None,
+        "expected": (
+            "Clean breakdown narrative listing each payment type with its revenue. "
+            "numbers_unmatched == 0 and violations == 0. "
+            "Regression check: percentage tokens ('78.2%', '18%' etc.) computed from "
+            "raw values must NOT be flagged as unmatched — they are arithmetic "
+            "derivatives of result data, not literal query-result values. "
+            "The _PCT_RE strip in verify_groundedness prevents this false positive."
+        ),
+        "validate": lambda r: (
+            _guardrail(r).get("grounding", {}).get("numbers_unmatched", 0) == 0
+            and _guardrail(r).get("compliance", {}).get("violations", 0) == 0
+        ),
+    },
+
 ]
 
 

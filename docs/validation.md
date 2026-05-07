@@ -83,7 +83,7 @@ Both pass because the underlying logic is sound; both are tracked as prompt-tuni
 
 ---
 
-## Guardrail injection eval (16 cases)
+## Guardrail injection eval (17 cases)
 
 The guardrail suite tests reliability components that the standard eval cannot exercise — you cannot reliably prompt an LLM to hallucinate specific numbers on demand. Instead, adversarial content is injected at controlled pipeline stages and the guardrail response is asserted.
 
@@ -111,9 +111,9 @@ Each case has a `validate(result_dict) → bool` callable that inspects the full
 
 The last case is a false-positive check: a valid SELECT injected in place of the LLM's SQL should pass `guard_sql` and produce a normal result.
 
-#### Narrative injection (8 cases)
+#### Narrative injection (9 cases)
 
-Five violation cases and three false-positive checks (the last three use the real LLM narrative — the guardrail should stay quiet):
+Five violation cases and four false-positive checks (the last four use the real LLM narrative — the guardrail should stay quiet):
 
 | Case | Injected narrative | Expected flags |
 |---|---|---|
@@ -124,9 +124,10 @@ Five violation cases and three false-positive checks (the last three use the rea
 | Average review score | "clearly unhappy… logistics team needs to improve" | `violations > 0` (motivational inference) |
 | Total orders | Real LLM narrative | `numbers_unmatched == 0`, `violations == 0` |
 | Average order value | Real LLM narrative | `violations == 0` |
-| Total revenue | Real LLM narrative | `violations == 0` |
+| Total revenue from delivered orders | Real LLM narrative | `numbers_unmatched == 0`, `violations == 0` |
+| Revenue by payment type | Real LLM narrative | `numbers_unmatched == 0`, `violations == 0` — regression check for `_PCT_RE`: percentage tokens in breakdown narratives must not inflate the unmatched ratio |
 
-The last three are false-positive checks: real LLM narratives on factual questions should produce zero violations.
+The last four are false-positive checks. The final case specifically guards against regressions in percentage-token handling: real LLM breakdown narratives include percentages ("78.2%") that are arithmetic derivatives of result data and must never be counted as unmatched numbers.
 
 #### Prompt injection (3 cases)
 
@@ -141,9 +142,9 @@ The last three are false-positive checks: real LLM narratives on factual questio
 | Category | Pass rate |
 |---|---|
 | SQL injection | 5/5 |
-| Narrative injection | 8/8 |
+| Narrative injection | 9/9 |
 | Prompt injection | 3/3 |
-| **Total** | **16/16** |
+| **Total** | **17/17** |
 
 ### Running the eval suites
 

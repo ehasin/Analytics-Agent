@@ -37,6 +37,17 @@ _RANGE_RE = re.compile(r"\b(\d+)\s*[–\-]\s*(\d+)\b")
 # causing a false positive hard-block on straightforward review-score questions.
 _OUT_OF_RE = re.compile(r"\bout\s+of\s+(\d+)\b|(?<=\d)/(\d+)\b")
 
+# Percentage tokens — numbers immediately followed by %. e.g. "78.2%", "18%".
+# Percentages in narrative prose are arithmetic derivatives of raw query values
+# (the LLM computes "credit card: 78.2%" from the absolute revenue figures).
+# They are never literally present in raw DuckDB result rows, so treating them
+# as unmatched would fire false positives on any distribution/breakdown narrative.
+# These tokens are stripped from the narrative before number extraction.
+_PCT_RE = re.compile(
+    r"\b\d{1,3}(?:,\d{3})*(?:\.\d+)?\s*%"
+    r"|\b\d+(?:\.\d+)?\s*%"
+)
+
 # Scientific notation produced by DuckDB / pandas for large floats.
 # Expanded to full integer/decimal form before building the match haystack.
 _SCI_RE = re.compile(r"-?\d+(?:\.\d+)?[eE][+\-]?\d+")
@@ -204,7 +215,14 @@ def verify_groundedness(narrative: str, queries: list[dict]) -> dict:
                 range_bounds.add(val)
 
         # ── Numbers ─────────────────────────────────────────
-        num_pairs = _extract_numbers(narrative)
+        # Strip percentage tokens before extraction. Percentages like "78.2%"
+        # are arithmetic derivatives of result values, not literal data claims —
+        # the LLM computes them from the raw rows it was given.  They will never
+        # appear in result_text, so including them would inflate the unmatched
+        # count and trigger false positives on any distribution/breakdown answer
+        # (e.g. "What is total revenue by payment type?").
+        narrative_for_nums = _PCT_RE.sub("", narrative)
+        num_pairs = _extract_numbers(narrative_for_nums)
         num_unmatched: list[str] = []
 
         for raw, normalised in num_pairs:
