@@ -157,7 +157,7 @@ def create_chat_fn(agent_fn, llm_fn, logs_dir, backend: str, model_name: str):
                 print(mode_line)
 
                 # ── Stage 2+3: run agent ──
-                print("  → Planning queries...")
+                print("  → Planning and executing queries...")
                 r = agent_fn(resolved, mode=active_mode, user_context=user_context)
                 turn_trace.extend(r.get("stage_trace", []))
 
