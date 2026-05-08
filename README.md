@@ -1,3 +1,14 @@
+> ## 📣 Roundtable: Practical Patterns for Building Reliable Analytics Agents
+>
+> I’m hosting a small roundtable discussion on **Friday, 22 May, 16:30–17:30 CET**.
+>
+> We’ll discuss practical patterns for making Analytics Agents more reliable: scope control, deterministic guardrails, validation layers, prompt classification, hallucination prevention, and stakeholder trust.
+>
+> **Seats are limited** to keep the discussion practical and interactive.
+>
+> 👉 **[Sign up here](https://docs.google.com/forms/d/e/1FAIpQLSdPhs3C3rbBZ8-181nGAzEzhWLdXoaHsWhFTdQHRYt5kQV9bw/viewform)**
+
+
 # Agentic AI Analytics Bot
 
 A production-grade agentic analytics system that turns natural language questions into validated SQL, executes them against a real e-commerce dataset, and narrates the findings — with deterministic guardrails against the failure modes that typically break LLM-driven analytics agents.
