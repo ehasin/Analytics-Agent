@@ -15,6 +15,14 @@ A production-grade agentic analytics system that turns natural language question
 
 **[▶ Try the live demo](https://analytics-agent-demo.streamlit.app)** &nbsp;·&nbsp; **[📓 Original Colab PoC](notebooks/Agentic_AI_Analytics_Bot.ipynb)** &nbsp;·&nbsp; **[📊 Validation results](docs/validation.md)**
 
+## Architecture at a glance
+
+![Reliable Analytics Agent core workflow](docs/assets/reliable-analytics-agent-core.jpg)
+
+Reliable Conversational Analytics is not just text-to-SQL. It is a trust-controlled workflow that knows when to answer, when to clarify, and when to stop.
+
+[Open the PDF one-pager](docs/assets/reliable-analytics-agent-at-a-glance.pdf) · [View the HTML one-pager](docs/reliable-analytics-agent-at-a-glance.html) · [Read the technical architecture](docs/architecture.md)
+
 ---
 
 ## What this is
