@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Reliable Conversational Analytics Architecture</title>
+  <style>
+    :root {
+      --bg: #f6f8fc;
+      --ink: #111827;
+      --muted: #667085;
+      --card: rgba(255,255,255,0.94);
+      --line: #d8deea;
+      --blue: #dbeafe;
+      --blue-border: #3b82f6;
+      --purple: #ede9fe;
+      --purple-border: #8b5cf6;
+      --green: #dcfce7;
+      --green-border: #22c55e;
+      --orange: #ffedd5;
+      --orange-border: #f97316;
+      --red: #fee2e2;
+      --red-border: #ef4444;
+      --teal: #ddf7f3;
+      --teal-border: #14b8a6;
+      --indigo: #e9e7ff;
+      --indigo-border: #7c3aed;
+      --grey: #eef2f7;
+      --shadow: 0 12px 28px rgba(16,24,40,0.07);
+      --radius: 22px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+    }
+
+    .page {
+      width: min(1160px, calc(100vw - 36px));
+      margin: 0 auto;
+      padding: 22px 0 18px;
+    }
+
+    .hero,
+    .section,
+    .footer {
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      margin-bottom: 13px;
+    }
+
+    .hero {
+      padding: 25px 30px;
+      background:
+        radial-gradient(circle at top left, rgba(59,130,246,0.18), transparent 32%),
+        radial-gradient(circle at bottom right, rgba(249,115,22,0.13), transparent 34%),
+        var(--card);
+      border: 1px solid #e3e8f2;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      padding: 7px 12px;
+      border-radius: 999px;
+      background: #111827;
+      color: white;
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 11px;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: clamp(30px, 3vw, 46px);
+      line-height: 0.98;
+      letter-spacing: -0.055em;
+    }
+
+    .opening {
+      margin: 0;
+      color: #475467;
+      font-size: clamp(15px, 1.35vw, 19px);
+      line-height: 1.36;
+      max-width: 1040px;
+      font-weight: 560;
+    }
+
+    .section {
+      background: var(--card);
+      border: 1px solid #e3e8f2;
+      padding: 16px 20px;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .icon {
+      width: 30px;
+      height: 30px;
+      border-radius: 10px;
+      display: grid;
+      place-items: center;
+      background: #111827;
+      color: white;
+      font-size: 17px;
+      font-weight: 900;
+      flex: 0 0 auto;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.1;
+      letter-spacing: -0.035em;
+    }
+
+    .trust-rows,
+    .pitch {
+      display: grid;
+      gap: 9px;
+    }
+
+    .trust-row {
+      border-radius: 18px;
+      border: 2px solid transparent;
+      padding: 12px 14px;
+      display: grid;
+      grid-template-columns: 140px 1fr;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .build { background: var(--green); border-color: var(--green-border); }
+    .break { background: var(--red); border-color: var(--red-border); }
+
+    .trust-label {
+      font-size: 15px;
+      font-weight: 950;
+      letter-spacing: -0.02em;
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .chip {
+      background: rgba(255,255,255,0.86);
+      border: 1px solid rgba(17,24,39,0.09);
+      border-radius: 999px;
+      padding: 7px 10px;
+      font-size: 12.5px;
+      font-weight: 800;
+      color: #344054;
+      white-space: nowrap;
+    }
+
+    .pitch-line {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px;
+      border-radius: 16px;
+      background: var(--grey);
+      border: 1px solid var(--line);
+    }
+
+    .pitch-line strong {
+      width: 112px;
+      flex: 0 0 auto;
+      font-size: 13px;
+    }
+
+    .pitch-line span {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.28;
+    }
+
+    .architecture-intro {
+      margin: -4px 0 11px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .legend-inline {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin: 11px 0 0;
+      padding: 9px 10px;
+      border-radius: 16px;
+      background: var(--grey);
+      border: 1px solid var(--line);
+    }
+
+    .legend-title {
+      font-size: 12px;
+      font-weight: 950;
+      color: #344054;
+      margin-right: 2px;
+    }
+
+    .legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11.5px;
+      color: #475467;
+      font-weight: 760;
+      white-space: nowrap;
+    }
+
+    .dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      border: 2px solid transparent;
+      flex: 0 0 auto;
+    }
+
+    .architecture {
+      border: 3px solid var(--red-border);
+      border-radius: 28px;
+      background: rgba(254,226,226,0.34);
+      padding: 22px 18px 18px;
+      position: relative;
+    }
+
+    .layer-tag {
+      position: absolute;
+      top: -14px;
+      left: 24px;
+      color: white;
+      border-radius: 999px;
+      padding: 7px 13px;
+      font-size: 11px;
+      font-weight: 950;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      background: var(--red-border);
+    }
+
+    .outer-note {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 13px;
+    }
+
+    .outer-note span {
+      padding: 7px 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.82);
+      border: 1px solid rgba(239,68,68,0.24);
+      color: #7f1d1d;
+      font-size: 11.5px;
+      font-weight: 850;
+    }
+
+    .agent-core {
+      border: 3px solid var(--orange-border);
+      border-radius: 24px;
+      background: rgba(255,237,213,0.62);
+      padding: 22px 14px 14px;
+      position: relative;
+    }
+
+    .agent-core .layer-tag {
+      background: var(--orange-border);
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 12px;
+      align-items: stretch;
+    }
+
+    .step {
+      border-radius: 18px;
+      border: 2px solid transparent;
+      padding: 13px 10px 12px;
+      min-height: 108px;
+      position: relative;
+      box-shadow: 0 8px 18px rgba(16,24,40,0.06);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .step:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      right: -15px;
+      top: 43%;
+      transform: translateY(-50%);
+      font-size: 20px;
+      font-weight: 950;
+      color: #64748b;
+      z-index: 5;
+    }
+
+    .badge {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: #111827;
+      color: white;
+      display: grid;
+      place-items: center;
+      font-size: 11px;
+      font-weight: 950;
+    }
+
+    .step h3 {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.05;
+      letter-spacing: -0.03em;
+    }
+
+    .step p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 11.5px;
+      line-height: 1.25;
+    }
+
+    .foundation-grid {
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 12px;
+      align-items: start;
+    }
+
+    .foundation-box {
+      border-radius: 16px;
+      border: 2px solid transparent;
+      padding: 12px 10px;
+      min-height: 84px;
+      position: relative;
+      box-shadow: 0 8px 18px rgba(16,24,40,0.05);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+    }
+
+    .foundation-box strong {
+      font-size: 12.5px;
+      line-height: 1.25;
+      color: #1f2937;
+    }
+
+    .foundation-box.arrow-up::before {
+      content: "↑";
+      position: absolute;
+      top: -22px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 18px;
+      font-weight: 950;
+      color: #64748b;
+    }
+
+    .foundation-1 { grid-column: 4 / 5; }
+    .foundation-2 { grid-column: 5 / 6; }
+    .foundation-3 { grid-column: 6 / 7; }
+
+    .blue { background: var(--blue); border-color: var(--blue-border); }
+    .purple { background: var(--purple); border-color: var(--purple-border); }
+    .green { background: var(--green); border-color: var(--green-border); }
+    .orange { background: var(--orange); border-color: var(--orange-border); }
+    .teal { background: var(--teal); border-color: var(--teal-border); }
+    .indigo { background: var(--indigo); border-color: var(--indigo-border); }
+
+    .summary {
+      color: #475467;
+      font-size: 14px;
+      line-height: 1.42;
+      margin: 0;
+      max-width: 1020px;
+    }
+
+    .footer {
+      background: #111827;
+      color: white;
+      padding: 16px 20px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 18px;
+      align-items: center;
+    }
+
+    .footer-text strong {
+      display: block;
+      font-size: 16px;
+      letter-spacing: -0.025em;
+      margin-bottom: 4px;
+    }
+
+    .footer-text span {
+      display: block;
+      color: rgba(255,255,255,0.72);
+      font-size: 12.5px;
+      line-height: 1.32;
+      max-width: 630px;
+    }
+
+    .links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+
+    .links a {
+      color: white;
+      text-decoration: none;
+      border: 1px solid rgba(255,255,255,0.35);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: 12.5px;
+      font-weight: 850;
+      background: rgba(255,255,255,0.08);
+      white-space: nowrap;
+    }
+
+    @media (max-width: 1050px) {
+      .flow { grid-template-columns: repeat(4, 1fr); }
+      .foundation-grid { grid-template-columns: repeat(4, 1fr); }
+      .foundation-1 { grid-column: 4 / 5; }
+      .foundation-2 { grid-column: 1 / 2; }
+      .foundation-3 { grid-column: 2 / 3; }
+      .step:not(:last-child)::after { display: none; }
+      .trust-row { grid-template-columns: 1fr; }
+      .footer { grid-template-columns: 1fr; }
+      .links { justify-content: flex-start; }
+    }
+
+    @media (max-width: 760px) {
+      .page { width: min(100vw - 24px, 1180px); padding-top: 12px; }
+      .hero { padding: 20px; }
+      .flow { grid-template-columns: 1fr; }
+      .foundation-grid { grid-template-columns: 1fr; }
+      .foundation-1, .foundation-2, .foundation-3 { grid-column: auto; }
+      .foundation-box.arrow-up::before { display: none; }
+      .pitch-line { align-items: flex-start; flex-direction: column; gap: 5px; }
+      .pitch-line strong { width: auto; }
+      .chip { white-space: normal; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <div class="eyebrow">Solution architecture</div>
+      <h1>Reliable Conversational Analytics</h1>
+      <p class="opening">Conversational Analytics becomes decision-grade when answer generation is guided by clear classification, disciplined narrative formulation, and deterministic validation.</p>
+    </section>
+
+    <section class="section">
+      <div class="section-title">
+        <div class="icon">★</div>
+        <h2>Stakeholder trust is the product</h2>
+      </div>
+
+      <div class="trust-rows">
+        <div class="trust-row build">
+          <div class="trust-label">Builds trust</div>
+          <div class="chips">
+            <span class="chip">Clear scope</span>
+            <span class="chip">Honest refusal</span>
+            <span class="chip">Correct numbers</span>
+            <span class="chip">Traceable evidence</span>
+            <span class="chip">Useful caveats</span>
+          </div>
+        </div>
+
+        <div class="trust-row break">
+          <div class="trust-label">Breaks trust</div>
+          <div class="chips">
+            <span class="chip">Confident guesses</span>
+            <span class="chip">Invented metrics</span>
+            <span class="chip">Wrong query scope</span>
+            <span class="chip">Narrative drift</span>
+            <span class="chip">Hidden uncertainty</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-title">
+        <div class="icon">✓</div>
+        <h2>How the architecture earns that trust</h2>
+      </div>
+
+      <div class="pitch">
+        <div class="pitch-line"><strong>Before SQL</strong><span>Check the question against a business-curated semantic model: valid use cases, metrics, field context, and known limits.</span></div>
+        <div class="pitch-line"><strong>During SQL</strong><span>Formulate safe queries against governed metadata and return structured evidence.</span></div>
+        <div class="pitch-line"><strong>After SQL</strong><span>Validate the narrative against the evidence: numbers, claims, caveats, and uncertainty.</span></div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-title">
+        <div class="icon">→</div>
+        <h2>Core workflow architecture</h2>
+      </div>
+
+      <p class="architecture-intro">The inner layer is the agent trust core. The outer layer is the minimal production shell needed to run it responsibly.</p>
+
+      <div class="architecture">
+        <div class="layer-tag">Production shell</div>
+        <div class="outer-note">
+          <span>Security</span>
+          <span>Access control</span>
+          <span>Permissions</span>
+          <span>Logging</span>
+          <span>Deployment</span>
+        </div>
+
+        <div class="agent-core">
+          <div class="layer-tag">Agent trust core</div>
+
+          <div class="flow">
+            <div class="step blue">
+              <div class="badge">1</div>
+              <h3>Ask</h3>
+              <p>User asks a business question.</p>
+            </div>
+
+            <div class="step orange">
+              <div class="badge">2</div>
+              <h3>Screen</h3>
+              <p>Block unsafe input.</p>
+            </div>
+
+            <div class="step purple">
+              <div class="badge">3</div>
+              <h3>Understand</h3>
+              <p>Resolve intent and ambiguity.</p>
+            </div>
+
+            <div class="step purple">
+              <div class="badge">4</div>
+              <h3>Decide</h3>
+              <p>Answer, clarify, or refuse.</p>
+            </div>
+
+            <div class="step green">
+              <div class="badge">5</div>
+              <h3>Query</h3>
+              <p>Run safe SQL.</p>
+            </div>
+
+            <div class="step purple">
+              <div class="badge">6</div>
+              <h3>Formulate</h3>
+              <p>Turn evidence into an answer.</p>
+            </div>
+
+            <div class="step orange">
+              <div class="badge">7</div>
+              <h3>Validate</h3>
+              <p>Check claims. Retry or block.</p>
+            </div>
+          </div>
+
+          <div class="foundation-grid">
+            <div class="foundation-box teal foundation-1 arrow-up" title="Feeds the Decide step">
+              <strong>Business-curated semantic model</strong>
+            </div>
+            <div class="foundation-box indigo foundation-2 arrow-up" title="Feeds the Query step">
+              <strong>Query formulation rules</strong>
+            </div>
+            <div class="foundation-box indigo foundation-3 arrow-up" title="Feeds the Formulate step">
+              <strong>Narrative generation rules</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="legend-inline">
+        <span class="legend-title">Legend:</span>
+        <span class="legend-item"><span class="dot" style="background:#dbeafe;border-color:#3b82f6"></span>User experience</span>
+        <span class="legend-item"><span class="dot" style="background:#ede9fe;border-color:#8b5cf6"></span>Agent reasoning</span>
+        <span class="legend-item"><span class="dot" style="background:#dcfce7;border-color:#22c55e"></span>Data and evidence</span>
+        <span class="legend-item"><span class="dot" style="background:#ddf7f3;border-color:#14b8a6"></span>Business-curated knowledge</span>
+        <span class="legend-item"><span class="dot" style="background:#e9e7ff;border-color:#7c3aed"></span>Agent governance rules</span>
+        <span class="legend-item"><span class="dot" style="background:#ffedd5;border-color:#f97316"></span>Safeguards</span>
+        <span class="legend-item"><span class="dot" style="background:#fee2e2;border-color:#ef4444"></span>Production shell</span>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-title">
+        <div class="icon">∴</div>
+        <h2>Summary</h2>
+      </div>
+      <p class="summary">Reliable Conversational Analytics is not just text-to-SQL. It is a trust-controlled workflow that knows when to answer, when to clarify, and when to stop.</p>
+    </section>
+
+    <footer class="footer">
+      <div class="footer-text">
+        <strong>Project demo</strong>
+        <span>I built an open-source Analytics Agent project demonstrating this pattern through a working app, GitHub repo, and LinkedIn write-up series.</span>
+      </div>
+      <nav class="links" aria-label="Project links">
+        <a href="https://www.linkedin.com/in/evgenihasin/" target="_blank" rel="noopener">LinkedIn</a>
+        <a href="https://github.com/ehasin/Analytics-Agent" target="_blank" rel="noopener">GitHub repo</a>
+        <a href="https://analytics-agent-demo.streamlit.app" target="_blank" rel="noopener">Live demo</a>
+      </nav>
+    </footer>
+  </main>
+</body>
+</html>
