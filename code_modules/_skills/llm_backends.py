@@ -29,7 +29,7 @@ import time
 MODEL_MAP: dict[str, dict[int, str]] = {
     "claude": {
         0: "claude-haiku-4-5",
-        1: "claude-sonnet-5",
+        1: "claude-sonnet-4-6",
         2: "claude-opus-4-8",
     },
     "groq": {
