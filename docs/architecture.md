@@ -120,9 +120,9 @@ At the end of each turn, a tier-0 model updates a running session summary (targe
 
 | Tier | Use | Claude | Groq | Gemini |
 |---|---|---|---|---|
-| 0 (fast) | Injection screen, summary updates | Haiku 4.5 | Llama 3.1 8B Instant | Gemini 2.5 Flash Lite |
-| 1 (default) | Interpret, classify+plan, narrate, retry | Sonnet 4.6 | Llama 3.3 70B Versatile | Gemini 2.5 Flash |
-| 2 (strong) | Reason-mode narration | Opus 4.7 | GPT-OSS-120B | Gemini 2.5 Pro |
+| 0 (fast) | Injection screen, summary updates | Haiku 4.5 | GPT-OSS-20B | Gemini 2.5 Flash Lite |
+| 1 (default) | Interpret, classify+plan, narrate, retry | Sonnet 4.6 | GPT-OSS-120B | Gemini 2.5 Flash |
+| 2 (strong) | Reason-mode narration | Opus 4.8 | GPT-OSS-120B | Gemini 2.5 Pro |
 
 Backends are interchangeable via `_skills/llm_backends.py`, which wraps all three under a unified `call_llm(prompt, backend, model_tier)` interface. All three backends enforce a 180-second ceiling per call (Claude and Groq via native `timeout=` parameter; Gemini via a `concurrent.futures` thread future, since the google-genai SDK has no per-call timeout).
 

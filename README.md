@@ -22,8 +22,8 @@ The agent supports three response modes:
 
 | Mode | When | Model tier |
 |---|---|---|
-| **Retrieve** | Direct factual lookups | Sonnet / Llama-70B |
-| **Explore** | Multi-angle investigation, trends, comparisons | Sonnet / Llama-70B |
+| **Retrieve** | Direct factual lookups | Sonnet / GPT-OSS-120B |
+| **Explore** | Multi-angle investigation, trends, comparisons | Sonnet / GPT-OSS-120B |
 | **Reason** | Causal explanation, hypothesis testing | Opus / GPT-OSS-120B |
 
 Mode selection is automatic per turn (LLM-inferred from the question and conversation context) or manually locked via slash commands (`/retrieve`, `/explore`, `/reason`, `/auto`).
@@ -209,12 +209,13 @@ g_results = run_guardrail_eval(agent_fn=agent, execute_fn=execute, llm_fn=llm,
 
 ## Status
 
-`v1.6.7` — SQL numeric format hardening and eval lambda fix. SQL planner prompt rule: SUM/AVG aggregates wrapped in `ROUND(..., 2)`, COUNT in `CAST(... AS BIGINT)` — prevents DuckDB scientific notation (`1.35e+07`) from tripping the groundedness checker. Q38 eval lambda fixed to accept ISO date format (`2017-01`) alongside month-name abbreviations.
+`v1.6.8` — Groq model migration. Groq retired `llama-3.1-8b-instant` and `llama-3.3-70b-versatile` for free/developer tiers on 2026-08-16, which took the live demo down. Groq tiers now run on `openai/gpt-oss-20b` (tier 0) and `openai/gpt-oss-120b` (tiers 1–2), per Groq's recommended replacements. The 50/50 validation result was measured on the previous Llama models and has not yet been re-run on gpt-oss.
 
 ## Changelog
 
 | Version | Summary |
 |---|---|
+| `v1.6.8` | Groq model migration after Groq retired its Llama 3.x models (2026-08-16, free/developer tiers): `MODEL_MAP["groq"]` tier 0 `llama-3.1-8b-instant` → `openai/gpt-oss-20b`, tier 1 `llama-3.3-70b-versatile` → `openai/gpt-oss-120b`; tier 2 unchanged. Groq init ping raised from 32 to 512 max tokens and made None-safe, since gpt-oss reasoning tokens could exhaust the old cap and return empty content. Streamlit sidebar model list and docs updated; Claude Opus label corrected to 4.8 to match `MODEL_MAP`. |
 | `v1.6.7` | SQL numeric format hardening: `CLASSIFY_AND_PLAN_PROMPT` SQL rules block now requires SUM/AVG to be wrapped in `ROUND(..., 2)` and COUNT in `CAST(... AS BIGINT)`, eliminating DuckDB scientific notation output (e.g. `1.349641e+07`) that caused the groundedness checker to parse exponent digits as unmatched numbers and hard-block the narrative. Eval lambda fix: Q38 multi-stage validator updated to accept ISO date format (`2017-01` through `2017-12`) alongside month-name abbreviations — the agent consistently outputs date-format monthly breakdown tables, the old lambda matched only on `jan`/`feb` short names and silently failed valid answers. |
 | `v1.6.6` | Compliance validation made deterministic and gating. `check_compliance_deterministic()` replaces tier-0 LLM `check_compliance()` for rules 1/2/4 — pure regex/word-list, zero LLM calls per turn. Rules 3 (motivational inference) and 5 (unsupported claims) dropped: 3 has no reliable deterministic detection and the narrative prompt is the enforcement layer; 5 is already covered by `verify_groundedness`. Compliance violations now fire retries (same as numeric unmatched); hard-block is groundedness-only — a sentence can be rewritten, a fabricated number cannot. Violation samples carry forward into `NARRATIVE_RETRY_PROMPT` via new `{compliance_feedback}` slot with rule-specific correction advice. Column allowlist: `build_column_allowlist(data_model)` builds `{table: frozenset(cols)}` from schema JSON; `_validate_columns()` walks the sqlglot AST for qualified column references; `guard_sql()` accepts optional `column_allowlist`; `execute_queries` auto-builds allowlist from DataFrames — zero API changes to callers. GQ10 updated: rule 3 documented as accepted false negative. |
 | `v1.6.5` | Prompt injection pre-classifier deployed as Stage 0 (`screen_for_injection` in `conversation_processor.py`). Runs on the raw question via `INJECTION_CLASSIFIER_PROMPT` (tier-0 LLM) before `interpret_turn` or any other prompt template processes the input. Blocks override instructions, system-prompt exfiltration, and identity manipulation; fails open on model error so a guardrail failure never blocks a legitimate question. Blocked turns are logged with `classification="injection_blocked"`. `requirements.txt` pinned to verified versions. MODEL_MAP documented as intentional pins. `.env.example` updated with Colab secret name mapping. |

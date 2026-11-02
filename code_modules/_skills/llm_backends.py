@@ -25,16 +25,18 @@ import time
 # on the 50-case suite). To update a model: change the string here, re-run
 # the full eval suite (50 standard + 17 guardrail), confirm pass rates hold,
 # then commit with the date in the message.
-# Last reviewed: 2026-05-07
+# Last reviewed: 2026-11-02
 MODEL_MAP: dict[str, dict[int, str]] = {
     "claude": {
         0: "claude-haiku-4-5",
         1: "claude-sonnet-4-6",
         2: "claude-opus-4-8",
     },
+    # Groq retired llama-3.1-8b-instant and llama-3.3-70b-versatile for
+    # free/developer tiers on 2026-08-16; replacements per Groq's notice.
     "groq": {
-        0: "llama-3.1-8b-instant",
-        1: "llama-3.3-70b-versatile",
+        0: "openai/gpt-oss-20b",
+        1: "openai/gpt-oss-120b",
         2: "openai/gpt-oss-120b",
     },
     "gemini": {
@@ -110,11 +112,13 @@ def init_backends(
             from groq import Groq
             client = Groq(api_key=key, max_retries=0)  # we handle retries ourselves
             if test:
+                # gpt-oss models spend tokens on reasoning before answering,
+                # so a 32-token cap can leave content empty.
                 r = client.chat.completions.create(
-                    model=MODEL_MAP["groq"][1], max_tokens=32,
+                    model=MODEL_MAP["groq"][1], max_tokens=512,
                     messages=[{"role": "user", "content": "Say hi in 3 words"}],
                 )
-                pings[name] = r.choices[0].message.content.strip()
+                pings[name] = (r.choices[0].message.content or "").strip()
 
         elif name == "gemini":
             from google import genai

@@ -437,8 +437,8 @@ def check_compliance(
         {"violations": int, "details": str}
         violations == -1 means the check failed to run (not a clean result).
     """
-    # Cap narrative length before building the prompt. Tier-0 models (e.g.
-    # llama-3.1-8b on Groq) have an 8K context window. The prompt template
+    # Cap narrative length before building the prompt. Some tier-0 models
+    # have an 8K context window. The prompt template
     # itself consumes ~300 tokens; leaving 3 000 chars for the narrative is a
     # safe ceiling that prevents silent truncation and avoids a false "clean"
     # result caused by partial input.

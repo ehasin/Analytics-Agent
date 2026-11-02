@@ -149,8 +149,8 @@ _SUGGESTIONS = [
 ]
 _BACKEND_LABELS   = {"groq": "Groq", "claude": "Claude"}
 _BACKEND_MODELS = {
-    "groq":   ["llama-3.1-8b", "llama-3.3-70b", "gpt-oss-120b"],
-    "claude": ["Haiku 4.5", "Sonnet 4.6", "Opus 4.7"],
+    "groq":   ["gpt-oss-20b", "gpt-oss-120b"],
+    "claude": ["Haiku 4.5", "Sonnet 4.6", "Opus 4.8"],
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
